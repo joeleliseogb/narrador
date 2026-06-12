@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Narrador" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/narrador_primary</item>
+        <item name="colorPrimaryDark">@color/narrador_primary_dark</item>
+        <item name="android:statusBarColor">@color/narrador_surface</item>
+        <item name="android:navigationBarColor">@color/narrador_surface</item>
+        <item name="android:windowBackground">@color/narrador_surface</item>
+    </style>
+</resources>

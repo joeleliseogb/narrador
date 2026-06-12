@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voces — Narrador YouTube</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Voces Edge neuronales</h1>
+      <p class="subtitle">
+        Voces neuronales online de Microsoft Edge. Activa las que quieras en el popup.
+      </p>
+    </header>
+
+    <section class="toolbar">
+      <label class="field-inline">
+        Idioma
+        <select id="lang-filter">
+          <option value="es-ES">Español</option>
+          <option value="en-US">English</option>
+          <option value="pt-BR">Português</option>
+          <option value="fr-FR">Français</option>
+          <option value="de-DE">Deutsch</option>
+          <option value="it-IT">Italiano</option>
+        </select>
+      </label>
+      <label class="field-inline search-wrap">
+        Buscar
+        <input type="search" id="search" placeholder="Nombre de voz…" />
+      </label>
+    </section>
+
+    <p id="status" class="status">Cargando voces…</p>
+    <p id="summary" class="summary"></p>
+
+    <div class="bulk-actions">
+      <button type="button" id="show-all">Activar todas</button>
+      <button type="button" id="hide-all">Desactivar todas</button>
+    </div>
+
+    <div id="voice-list" class="voice-list"></div>
+
+    <footer>
+      <p>
+        Los cambios se guardan al instante. Abre el popup de la extensión para usar
+        las voces visibles.
+      </p>
+    </footer>
+
+    <script src="voices-shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

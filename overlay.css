@@ -1,0 +1,203 @@
+#narrador-yt-widget {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 99999;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+#narrador-yt-widget .narrador-panel {
+  background: rgba(15, 15, 15, 0.92);
+  border: 1px solid #444;
+  border-radius: 12px;
+  padding: 12px 14px;
+  min-width: 200px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  color: #f1f1f1;
+}
+
+#narrador-yt-widget .narrador-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #aaa;
+}
+
+#narrador-yt-widget .narrador-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #666;
+  flex-shrink: 0;
+}
+
+#narrador-yt-widget .narrador-dot.on {
+  background: #2ecc71;
+  box-shadow: 0 0 8px #2ecc71;
+}
+
+#narrador-yt-widget .narrador-dot.speaking {
+  background: #ff4444;
+  animation: narrador-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes narrador-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+#narrador-yt-widget .narrador-status {
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ccc;
+  min-height: 34px;
+}
+
+#narrador-yt-widget .narrador-status.warn {
+  color: #ffb347;
+}
+
+#narrador-yt-widget .narrador-status.error {
+  color: #ff6b6b;
+}
+
+#narrador-yt-widget .narrador-progress {
+  height: 4px;
+  background: #333;
+  border-radius: 2px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+#narrador-yt-widget .narrador-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #cc0000, #ff6666);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+#narrador-yt-widget .narrador-last {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 10px;
+  font-style: italic;
+  max-height: 36px;
+  overflow: hidden;
+}
+
+#narrador-yt-widget .narrador-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#narrador-yt-widget .btn-reload {
+  flex: 1 1 100%;
+  background: #222;
+  color: #ccc;
+  border: 1px solid #444;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#narrador-yt-widget .btn-reload:hover {
+  background: #333;
+}
+
+#narrador-yt-widget button {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#narrador-yt-widget .btn-toggle {
+  background: #cc0000;
+  color: #fff;
+}
+
+#narrador-yt-widget .btn-toggle:hover {
+  background: #ff0000;
+}
+
+#narrador-yt-widget .btn-toggle.off {
+  background: #333;
+  color: #ccc;
+}
+
+#narrador-yt-widget .btn-toggle.off:hover {
+  background: #444;
+}
+
+#narrador-yt-widget .btn-test {
+  background: #222;
+  color: #f1f1f1;
+  border: 1px solid #444;
+}
+
+#narrador-yt-widget .btn-test:hover {
+  background: #333;
+}
+
+#narrador-yt-widget .btn-minimize {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+#narrador-yt-widget .btn-minimize:hover {
+  color: #aaa;
+}
+
+#narrador-yt-widget .narrador-panel {
+  position: relative;
+}
+
+#narrador-yt-widget.collapsed .narrador-panel {
+  display: none;
+}
+
+#narrador-yt-widget.collapsed .narrador-fab {
+  display: flex;
+}
+
+#narrador-yt-widget .narrador-fab {
+  display: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #cc0000;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  align-items: center;
+  justify-content: center;
+}
+
+#narrador-yt-widget .narrador-fab:hover {
+  background: #ff0000;
+}

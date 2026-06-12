@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Narrador</string>
+    <string name="nav_browser">YouTube</string>
+    <string name="nav_books">Libros</string>
+    <string name="browser_url_hint">https://www.youtube.com</string>
+    <string name="browser_go">Ir</string>
+    <string name="browser_home">Inicio</string>
+    <string name="books_pick">Abrir documento</string>
+    <string name="books_play">Narrar</string>
+    <string name="books_pause">Pausar</string>
+    <string name="books_stop">Detener</string>
+    <string name="books_speed">Velocidad</string>
+    <string name="books_no_file">Elige un TXT, EPUB, PDF, DOC o DOCX</string>
+    <string name="narration_on">Narración activa</string>
+    <string name="narration_off">Narración pausada</string>
+</resources>

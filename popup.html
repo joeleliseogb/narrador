@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Narrador YouTube</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Narrador YouTube</h1>
+      <p class="subtitle">Subtítulos en voz alta</p>
+    </header>
+
+    <section class="toggle-row">
+      <label for="enabled">Activar narración</label>
+      <input type="checkbox" id="enabled" />
+    </section>
+
+    <section class="field">
+      <p class="field-label">Motor de voz neuronal</p>
+      <label class="radio-row">
+        <input type="radio" name="ttsEngine" id="tts-local" value="local" checked />
+        Local (RHVoice) — baja latencia, mejor sync
+      </label>
+      <label class="radio-row">
+        <input type="radio" name="ttsEngine" id="tts-edge" value="edge" />
+        Online (Microsoft Edge) — requiere internet
+      </label>
+    </section>
+
+    <section class="field">
+      <label for="lang">Idioma de voz</label>
+      <select id="lang">
+        <option value="es-ES">Español (España)</option>
+        <option value="es-MX">Español (México)</option>
+        <option value="es-AR">Español (Argentina)</option>
+        <option value="en-US">English (US)</option>
+        <option value="en-GB">English (UK)</option>
+        <option value="pt-BR">Português (Brasil)</option>
+        <option value="fr-FR">Français</option>
+        <option value="de-DE">Deutsch</option>
+        <option value="it-IT">Italiano</option>
+      </select>
+    </section>
+
+    <section class="field">
+      <label for="voice">Voz</label>
+      <select id="voice">
+        <option value="">Automática (según idioma)</option>
+      </select>
+      <div class="voice-presets" id="voice-presets">
+        <button type="button" class="voice-preset" data-voice="local:mateo" data-engine="local">
+          Mateo (masculina)
+        </button>
+        <button type="button" class="voice-preset" data-voice="local:leticia" data-engine="local" title="Solo si la instalaste; en RHVoice suele ser portugués, no español">
+          Leticia (solo si está instalada)
+        </button>
+        <button type="button" class="voice-preset" data-voice="edge:es-ES-AlvaroNeural" data-engine="edge">
+          Álvaro Edge (masculina)
+        </button>
+        <button type="button" class="voice-preset" data-voice="edge:es-ES-ElviraNeural" data-engine="edge">
+          Elvira Edge (femenina)
+        </button>
+      </div>
+      <p class="field-hint">
+        <a href="#" id="manage-voices">Gestionar voces…</a> (escuchar y ocultar las que no quieras).
+        Voz femenina en español (recomendado): pulsa <strong>Elvira Edge</strong> arriba.
+        RHVoice snap suele traer <strong>Mateo</strong> (masculina); lista voces: <code>sudo rhvoice.vm -a | grep -i span</code>
+      </p>
+      <p class="field-hint">
+        Varios interlocutores: los subtítulos de YouTube no suelen indicar quién habla; elige una voz para todo el vídeo o cámbiala en el popup entre secciones.
+      </p>
+    </section>
+
+    <section class="field speed-section">
+      <label for="rate">Velocidad de narración <span id="rate-value">1.0</span></label>
+      <div class="speed-presets">
+        <button type="button" class="speed-preset" data-rate="0.85">Lenta</button>
+        <button type="button" class="speed-preset" data-rate="1.0">Normal</button>
+      </div>
+      <input type="range" id="rate" min="0.75" max="1.0" step="0.05" value="1.0" />
+      <p class="field-hint">Con RHVoice local, la sync usa velocidad normal (1.0). Ajusta solo si quieres más lento.</p>
+    </section>
+
+    <section class="field catchup-section">
+      <p class="field-label">Cuando la voz va retrasada</p>
+      <label class="radio-row">
+        <input type="radio" name="catchUpMode" id="catchUp-playthrough" value="playthrough" checked />
+        Vídeo en marcha (recomendado — no pausa; baja el audio del vídeo al 15 % mientras narra)
+      </label>
+      <label class="radio-row">
+        <input type="radio" name="catchUpMode" id="catchUp-pause" value="pause" />
+        Pausar el vídeo (narración escena a escena, muy fluida)
+      </label>
+      <label class="radio-row">
+        <input type="radio" name="catchUpMode" id="catchUp-speedup" value="speedup" />
+        Acelerar la voz y saltar escenas pasadas
+      </label>
+      <label class="radio-row">
+        <input type="radio" name="catchUpMode" id="catchUp-slowdown" value="slowdown" />
+        Ralentizar el vídeo
+      </label>
+    </section>
+
+    <section class="toggle-row">
+      <label for="autoSync">Auto-ajuste para sincronizar</label>
+      <input type="checkbox" id="autoSync" checked />
+    </section>
+
+    <section class="field" id="max-sync-field">
+      <label for="maxSyncRate">Velocidad máxima de voz (sync) <span id="max-sync-value">2.0</span></label>
+      <input type="range" id="maxSyncRate" min="1" max="2.5" step="0.1" value="2.0" />
+      <p class="field-hint">Modo «Acelerar la voz». Sube si aún se pierden escenas.</p>
+    </section>
+
+    <section class="field" id="min-video-field">
+      <label for="minVideoRate">Velocidad mínima del vídeo <span id="min-video-value">0.65</span></label>
+      <input type="range" id="minVideoRate" min="0.4" max="0.95" step="0.05" value="0.65" />
+      <p class="field-hint">Modo «Ralentizar el vídeo». Más bajo = más margen para la narración.</p>
+    </section>
+
+    <section class="field">
+      <label for="pitch">Tono <span id="pitch-value">1.0</span></label>
+      <input type="range" id="pitch" min="0.5" max="2" step="0.1" value="1" />
+    </section>
+
+    <section class="field">
+      <label for="volume">Volumen <span id="volume-value">1.0</span></label>
+      <input type="range" id="volume" min="0" max="1" step="0.1" value="1" />
+    </section>
+
+    <section class="toggle-row">
+      <label for="pauseWhileLoadingSubs">Pausar vídeo mientras descarga subs</label>
+      <input type="checkbox" id="pauseWhileLoadingSubs" checked />
+    </section>
+
+    <section class="toggle-row">
+      <label for="autoEnableCC">Mostrar subtítulos en pantalla (opcional)</label>
+      <input type="checkbox" id="autoEnableCC" />
+    </section>
+
+    <section class="actions">
+      <button type="button" id="test-voice">Probar voz</button>
+    </section>
+
+    <p id="voice-hint" class="voice-hint"></p>
+
+    <footer>
+      <p>No hace falta activar CC: los subtítulos se descargan en segundo plano.</p>
+      <p class="footer-note">
+        RHVoice local: ./native/install-rhvoice.sh · Edge online: pip install --user edge-tts
+        · <a href="#" id="manage-voices-footer">Gestionar voces</a>
+      </p>
+    </footer>
+
+    <script src="voices-shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

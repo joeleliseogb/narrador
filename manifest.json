@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Narrador de Subtítulos YouTube",
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "version": "2.27.5",
+  "description": "Narra en voz alta los subtítulos automáticos de YouTube usando síntesis de voz del navegador.",
+  "permissions": ["storage", "activeTab", "tabs", "nativeMessaging"],
+  "host_permissions": ["*://*.youtube.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Narrador YouTube",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
