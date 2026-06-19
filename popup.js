@@ -388,8 +388,8 @@ testBtn.addEventListener("click", () => {
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs[0];
-    if (!tab?.id || !tab.url?.includes("youtube.com")) {
-      setVoiceHint("Abre YouTube primero, luego pulsa Probar voz.", "warn");
+    if (!tab?.id) {
+      setVoiceHint("Abre una página web primero.", "warn");
       return;
     }
 
@@ -400,7 +400,7 @@ testBtn.addEventListener("click", () => {
       tab.id,
       {
         type: "TEST_SPEAK",
-        text: "Hola, esta es una prueba del narrador de subtítulos de YouTube.",
+        text: "Hola, esta es una prueba del narrador de voz.",
         rate: parseFloat(rateEl.value),
         pitch: parseFloat(pitchEl.value),
         volume: parseFloat(volumeEl.value),
@@ -411,7 +411,7 @@ testBtn.addEventListener("click", () => {
         testBtn.disabled = false;
         testBtn.textContent = "Probar voz";
         if (chrome.runtime.lastError) {
-          setVoiceHint("Recarga YouTube (F5) y vuelve a probar.", "warn");
+          setVoiceHint("Abre una página compatible (YouTube, CDPE o archivo local) y recárgala (F5).", "warn");
         } else {
           setVoiceHint("Prueba enviada. ¿Oíste la voz?", "ok");
         }

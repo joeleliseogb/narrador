@@ -32,6 +32,16 @@
       "js": ["content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.cdpe.sa.com.gt/*",
+        "file:///*.html",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["narrar-documento.js"],
+      "run_at": "document_idle"
     }
   ]
 }
