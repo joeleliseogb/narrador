@@ -37,37 +37,47 @@ EOF
   echo "  ✓ $base_dir/$HOST_ID.json"
 }
 
-echo "=== Instalador del motor de voz nativo ==="
-echo ""
-echo "Necesitas el ID de la extensión en cada navegador donde la uses."
-echo "  Brave:  brave://extensions/"
-echo "  Chrome: chrome://extensions/"
-echo "  Edge:   edge://extensions/"
-echo "  (Modo desarrollador activado → copiar ID)"
-echo ""
-read -rp "ID Brave / Chrome / Chromium: " CHROMIUM_ID
+CHROMIUM_ID="${1:-}"
+EDGE_ID="${2:-}"
 
 if [[ -z "$CHROMIUM_ID" ]]; then
-  read -rp "¿Solo Microsoft Edge? Pega el ID de Edge: " CHROMIUM_ID
-fi
+  echo "=== Instalador del motor de voz nativo ==="
+  echo ""
+  echo "Necesitas el ID de la extensión en cada navegador donde la uses."
+  echo "  Brave:  brave://extensions/"
+  echo "  Chrome: chrome://extensions/"
+  echo "  Edge:   edge://extensions/"
+  echo "  (Modo desarrollador activado → copiar ID)"
+  echo ""
+  read -rp "ID Brave / Chrome / Chromium: " CHROMIUM_ID
 
-if [[ -z "$CHROMIUM_ID" ]]; then
-  echo "Error: hace falta al menos un ID."
-  exit 1
-fi
+  if [[ -z "$CHROMIUM_ID" ]]; then
+    read -rp "¿Solo Microsoft Edge? Pega el ID de Edge: " CHROMIUM_ID
+  fi
 
-if [[ ${#CHROMIUM_ID} -lt 20 ]]; then
-  echo "Error: el ID parece incompleto (suele tener 32 caracteres)."
-  exit 1
-fi
+  if [[ -z "$CHROMIUM_ID" ]]; then
+    echo "Error: hace falta al menos un ID."
+    exit 1
+  fi
 
-echo ""
-read -rp "ID de Edge (Enter = mismo ID; escribe 'no' para omitir Edge): " EDGE_ANSWER
-EDGE_ID=""
-if [[ -z "$EDGE_ANSWER" ]]; then
-  EDGE_ID="$CHROMIUM_ID"
-elif [[ "${EDGE_ANSWER,,}" != "no" && "${EDGE_ANSWER,,}" != "n" ]]; then
-  EDGE_ID="$EDGE_ANSWER"
+  if [[ ${#CHROMIUM_ID} -lt 20 ]]; then
+    echo "Error: el ID parece incompleto (suele tener 32 caracteres)."
+    exit 1
+  fi
+
+  echo ""
+  read -rp "ID de Edge (Enter = mismo ID; escribe 'no' para omitir Edge): " EDGE_ANSWER
+  if [[ -z "$EDGE_ANSWER" ]]; then
+    EDGE_ID="$CHROMIUM_ID"
+  elif [[ "${EDGE_ANSWER,,}" != "no" && "${EDGE_ANSWER,,}" != "n" ]]; then
+    EDGE_ID="$EDGE_ANSWER"
+  fi
+else
+  if [[ -z "$EDGE_ID" ]]; then
+    EDGE_ID="$CHROMIUM_ID"
+  elif [[ "${EDGE_ID,,}" == "no" || "${EDGE_ID,,}" == "n" ]]; then
+    EDGE_ID=""
+  fi
 fi
 
 echo ""
