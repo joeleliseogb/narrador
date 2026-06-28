@@ -1757,7 +1757,10 @@
       return settings.rate;
     }
 
-    const maxRate = Math.max(settings.rate, settings.maxSyncRate || 2.0);
+    let maxRate = Math.max(settings.rate, settings.maxSyncRate || 2.0);
+    if (settings.ttsEngine === "edge" || settings.ttsEngine === "browser") {
+      maxRate = Math.min(maxRate, 1.25);
+    }
     const remainingSec = Math.max(0.2, (cue.endMs - timeMs) / 1000);
     const neededSec = estimateSpeechSec(cue.text, 1);
     let rate = settings.rate;
