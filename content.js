@@ -1122,7 +1122,7 @@
     if (code && langMatches(code, pref)) score *= 2.5;
     else if (payload?.translated && langMatches(code, pref)) score *= 2.5;
     else if (code) score *= 0.02;
-    if (!captionListMatchesLang(list, pref)) score *= 0.001;
+    if (!payload?.fromPanel && !captionListMatchesLang(list, pref)) score *= 0.001;
     return score;
   }
 
@@ -2028,7 +2028,7 @@
                     }
                   : payload;
           const list = parseCaptionPayload(normalized);
-          if (!captionListMatchesLang(list, langPref)) continue;
+          if (!payload?.fromPanel && !captionListMatchesLang(list, langPref)) continue;
           const score = scoreCaptionList(list, payload);
           if (list.length > 5 && score > bestScore) {
             const code = payload?.languageCode;
