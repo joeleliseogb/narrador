@@ -2274,10 +2274,24 @@
     URL.revokeObjectURL(url);
   }
 
+  function getVideoTitleClean() {
+    const metaTitle = document.querySelector('meta[name="title"]');
+    let title = metaTitle?.getAttribute("content") || "";
+    if (!title) {
+      const h1 = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, h1.title yt-formatted-string");
+      title = h1?.textContent || "";
+    }
+    if (!title) {
+      title = document.title.replace(/\s*-\s*YouTube$/, "");
+    }
+    let clean = title.replace(/[^\w\s\.\-\(\)]/gi, "").trim();
+    return clean || getVideoId();
+  }
+
   function exportTxt() {
     if (!cues.length) return alert("No hay subtítulos cargados para exportar.");
     const txt = cues.map((c) => c.text).join("\n");
-    downloadLocalFile(txt, `${getVideoId()}_traduccion.txt`, "text/plain");
+    downloadLocalFile(txt, `${getVideoTitleClean()}.txt`, "text/plain");
   }
 
   function exportSrt() {
@@ -2288,7 +2302,7 @@
       srt += `${formatSrtTime(c.startMs)} --> ${formatSrtTime(c.endMs)}\n`;
       srt += `${c.text}\n\n`;
     });
-    downloadLocalFile(srt, `${getVideoId()}_traduccion.srt`, "text/srt");
+    downloadLocalFile(srt, `${getVideoTitleClean()}.srt`, "text/srt");
   }
 
   function requestVideoDownload(audioOnly) {
