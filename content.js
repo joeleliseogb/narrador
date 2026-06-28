@@ -342,14 +342,29 @@
 
   function checkNativeHost(force) {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: Boolean(force) }, (resp) => {
-        useNative = Boolean(resp?.native);
-        nativeEngine = resp?.engine || null;
-        nativeEngines = Array.isArray(resp?.engines) ? resp.engines : nativeEngine ? [nativeEngine] : [];
-        if (useNative) voiceCount = 1;
-        updateUI();
-        resolve(useNative);
-      });
+      try {
+        if (!chrome.runtime || !chrome.runtime.sendMessage) {
+          useNative = false;
+          resolve(false);
+          return;
+        }
+        chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: Boolean(force) }, (resp) => {
+          if (chrome.runtime.lastError) {
+            useNative = false;
+            resolve(false);
+            return;
+          }
+          useNative = Boolean(resp?.native);
+          nativeEngine = resp?.engine || null;
+          nativeEngines = Array.isArray(resp?.engines) ? resp.engines : nativeEngine ? [nativeEngine] : [];
+          if (useNative) voiceCount = 1;
+          updateUI();
+          resolve(useNative);
+        });
+      } catch (e) {
+        useNative = false;
+        resolve(false);
+      }
     });
   }
 
