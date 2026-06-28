@@ -359,6 +359,12 @@
 
   // Inicializar
   loadSettings().then(async () => {
+    // Solo activar en manuales y guías (páginas bajo la carpeta /docs/)
+    const path = window.location.pathname.toLowerCase();
+    if (!path.includes('/docs/')) {
+      return;
+    }
+
     await checkNativeHost();
     parsePageContent();
     createWidget();

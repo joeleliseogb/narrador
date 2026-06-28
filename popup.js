@@ -36,6 +36,7 @@ const catchUpSpeedupEl = document.getElementById("catchUp-speedup");
 const catchUpSlowdownEl = document.getElementById("catchUp-slowdown");
 const ttsLocalEl = document.getElementById("tts-local");
 const ttsEdgeEl = document.getElementById("tts-edge");
+const ttsBrowserEl = document.getElementById("tts-browser");
 const rateValueEl = document.getElementById("rate-value");
 const maxSyncValueEl = document.getElementById("max-sync-value");
 const minVideoValueEl = document.getElementById("min-video-value");
@@ -124,10 +125,38 @@ function populateVoiceList(voices) {
 }
 
 function loadVoicesFromPage() {
-  chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: true }, (nativeResp) => {
-    const engine = ttsLocalEl?.checked ? "local" : "edge";
-    const engineLabel = engine === "local" ? "RHVoice local" : "Edge online";
+  const engine = ttsLocalEl?.checked ? "local" : ttsEdgeEl?.checked ? "edge" : "browser";
+  const engineLabel = engine === "local" ? "RHVoice local" : engine === "edge" ? "Edge online" : "Navegador";
 
+  if (engine === "browser") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (!tab?.id) {
+        voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
+        setVoiceHint("Abre una pestaña compatible y recárgala (F5)", "warn");
+        return;
+      }
+      chrome.tabs.sendMessage(tab.id, { type: "GET_VOICES" }, (voiceResp) => {
+        if (chrome.runtime.lastError) {
+          voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
+          setVoiceHint("Recarga la pestaña (F5) para activar voces locales", "warn");
+          return;
+        }
+        const voices = voiceResp?.voices || [];
+        const filtered = filterVoicesByEngine(voices, engine);
+        if (filtered.length) {
+          populateVoiceList(filtered);
+          setVoiceHint(`${filtered.length} voz(es) del navegador.`, "ok");
+        } else {
+          voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
+          setVoiceHint("Sin voces de navegador para este idioma.", "warn");
+        }
+      });
+    });
+    return;
+  }
+
+  chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: true }, (nativeResp) => {
     if (!nativeResp?.native) {
       voiceEl.innerHTML = `<option value="">Automática</option>`;
       setVoiceHint("Motor nativo no instalado. Ejecuta native/install.sh", "warn");
@@ -177,8 +206,8 @@ function bindRange(input, label, key) {
 
 function populateForm(stored) {
   const engine = stored.ttsEngine || "local";
-  const prefix = engine === "local" ? "local:" : "edge:";
-  if (stored.voiceURI && !stored.voiceURI.startsWith(prefix)) {
+  const prefix = engine === "local" ? "local:" : engine === "edge" ? "edge:" : "";
+  if (prefix && stored.voiceURI && !stored.voiceURI.startsWith(prefix)) {
     stored.voiceURI = "";
     chrome.storage.sync.set({ voiceURI: "" });
   }
@@ -189,7 +218,7 @@ function populateForm(stored) {
     }
   }
   visibleVoices = (stored.visibleVoices || []).filter(
-    (k) => k.startsWith("edge:") || k.startsWith("local:")
+    (k) => k.startsWith("edge:") || k.startsWith("local:") || k.startsWith("browser:") || !k.includes(":")
   );
   if (visibleVoices.length !== (stored.visibleVoices || []).length) {
     chrome.storage.sync.set({ visibleVoices });
@@ -210,6 +239,7 @@ function populateForm(stored) {
   if (catchUpSlowdownEl) catchUpSlowdownEl.checked = catchUp === "slowdown";
   if (ttsLocalEl) ttsLocalEl.checked = engine === "local";
   if (ttsEdgeEl) ttsEdgeEl.checked = engine === "edge";
+  if (ttsBrowserEl) ttsBrowserEl.checked = engine === "browser";
   minVideoRateEl.value = stored.minVideoRate ?? 0.65;
   minVideoValueEl.textContent = (stored.minVideoRate ?? 0.65).toFixed(2);
   autoSyncEl.checked = stored.autoSync !== false;
@@ -231,7 +261,7 @@ function populateForm(stored) {
 
 enabledEl.addEventListener("change", () => save({ enabled: enabledEl.checked }));
 langEl.addEventListener("change", () => {
-  const engine = ttsLocalEl?.checked ? "local" : "edge";
+  const engine = ttsLocalEl?.checked ? "local" : ttsEdgeEl?.checked ? "edge" : "browser";
   const voiceURI =
     engine === "local" && (langEl.value || "es").startsWith("es") ? "local:mateo" : "";
   save({ lang: langEl.value, voiceURI });
@@ -282,9 +312,13 @@ function saveTtsEngine(engine) {
       ? voiceEl.value && voiceEl.value.startsWith("local:")
         ? voiceEl.value
         : "local:mateo"
-      : voiceEl.value && voiceEl.value.startsWith("edge:")
-        ? voiceEl.value
-        : "";
+      : engine === "edge"
+        ? voiceEl.value && voiceEl.value.startsWith("edge:")
+          ? voiceEl.value
+          : ""
+        : voiceEl.value && voiceEl.value.startsWith("browser:")
+          ? voiceEl.value
+          : "";
   save({ ttsEngine: engine, voiceURI });
   voiceEl.value = voiceURI;
   loadVoicesFromPage();
@@ -292,7 +326,7 @@ function saveTtsEngine(engine) {
 }
 
 function updateVoicePresetActive() {
-  const engine = ttsLocalEl?.checked ? "local" : "edge";
+  const engine = ttsLocalEl?.checked ? "local" : ttsEdgeEl?.checked ? "edge" : "browser";
   document.querySelectorAll(".voice-preset").forEach((btn) => {
     const match =
       btn.dataset.engine === engine && btn.dataset.voice === voiceEl.value;
@@ -305,6 +339,8 @@ function applyVoicePreset(voiceURI, engine) {
     ttsLocalEl.checked = true;
   } else if (engine === "edge" && ttsEdgeEl) {
     ttsEdgeEl.checked = true;
+  } else if (engine === "browser" && ttsBrowserEl) {
+    ttsBrowserEl.checked = true;
   }
   save({ ttsEngine: engine, voiceURI });
   voiceEl.value = voiceURI;
@@ -325,6 +361,11 @@ if (ttsLocalEl) {
 if (ttsEdgeEl) {
   ttsEdgeEl.addEventListener("change", () => {
     if (ttsEdgeEl.checked) saveTtsEngine("edge");
+  });
+}
+if (ttsBrowserEl) {
+  ttsBrowserEl.addEventListener("change", () => {
+    if (ttsBrowserEl.checked) saveTtsEngine("browser");
   });
 }
 
@@ -383,7 +424,7 @@ testBtn.addEventListener("click", () => {
     volume: parseFloat(volumeEl.value),
     lang: langEl.value,
     voiceURI: voiceEl.value,
-    ttsEngine: ttsLocalEl?.checked ? "local" : "edge",
+    ttsEngine: ttsLocalEl?.checked ? "local" : ttsEdgeEl?.checked ? "edge" : "browser",
   });
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

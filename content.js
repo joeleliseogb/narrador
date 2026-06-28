@@ -282,6 +282,64 @@
     video.play().catch(() => {});
   }
 
+  function updateBrowserVoices() {
+    if (typeof speechSynthesis !== "undefined") {
+      const list = speechSynthesis.getVoices() || [];
+      pageVoices = list.map((v) => ({
+        name: v.name,
+        lang: v.lang,
+        voiceURI: v.voiceURI,
+        voiceType: "browser",
+        neural: v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Neural")
+      }));
+      voiceCount = pageVoices.length;
+      updateUI();
+    }
+  }
+
+  if (typeof speechSynthesis !== "undefined") {
+    speechSynthesis.addEventListener("voiceschanged", updateBrowserVoices);
+    // Poll/fetch initial voices
+    setTimeout(updateBrowserVoices, 100);
+    setTimeout(updateBrowserVoices, 1000);
+  }
+
+  function speakBrowserTts(text, cueIndex, rateOverride) {
+    if (typeof speechSynthesis === "undefined") return false;
+    speechSynthesis.cancel();
+
+    let effectiveRate = rateOverride ?? settings.rate;
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = effectiveRate;
+    u.pitch = settings.pitch;
+    u.volume = settings.volume;
+    u.lang = ttsLangForCaptions();
+
+    const voices = speechSynthesis.getVoices();
+    const voiceURI = settings.voiceURI;
+    if (voiceURI) {
+      const cleanURI = voiceURI.replace(/^browser:/, "");
+      const selected = voices.find((v) => v.voiceURI === cleanURI || v.voiceURI === voiceURI);
+      if (selected) u.voice = selected;
+    } else {
+      const prefix = u.lang.split("-")[0];
+      const selected = voices.find((v) => v.lang.startsWith(prefix) && v.localService) ||
+                       voices.find((v) => v.lang.startsWith(prefix)) ||
+                       voices[0];
+      if (selected) u.voice = selected;
+    }
+
+    u.onstart = () => {
+      setSpeaking(true, cueIndex);
+    };
+    u.onend = u.onerror = (e) => {
+      setSpeaking(false, -1, true);
+    };
+
+    speechSynthesis.speak(u);
+    return true;
+  }
+
   function checkNativeHost(force) {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: Boolean(force) }, (resp) => {
@@ -367,8 +425,8 @@
     return new Promise((resolve) => {
       chrome.storage.sync.get(DEFAULTS, (stored) => {
         settings = { ...DEFAULTS, ...stored };
-        const prefix = settings.ttsEngine === "local" ? "local:" : "edge:";
-        if (settings.voiceURI && !settings.voiceURI.startsWith(prefix)) {
+        const prefix = settings.ttsEngine === "local" ? "local:" : settings.ttsEngine === "edge" ? "edge:" : "";
+        if (prefix && settings.voiceURI && !settings.voiceURI.startsWith(prefix)) {
           settings.voiceURI = "";
           chrome.storage.sync.set({ voiceURI: "" });
         }
@@ -386,7 +444,7 @@
           chrome.storage.sync.set({ voiceURI: "local:mateo" });
         }
         const visible = (stored.visibleVoices || []).filter(
-          (k) => String(k).startsWith("edge:") || String(k).startsWith("local:")
+          (k) => String(k).startsWith("edge:") || String(k).startsWith("local:") || String(k).startsWith("browser:") || !String(k).includes(":")
         );
         if (visible.length !== (stored.visibleVoices || []).length) {
           settings.visibleVoices = visible;
@@ -669,7 +727,7 @@
       speakTimer = null;
     }
 
-    if (useNative) {
+    if (useNative && settings.ttsEngine !== "browser") {
       const epoch = ++speakEpoch;
       const ttsEngine = settings.ttsEngine || "local";
       const voiceURI =
@@ -764,19 +822,18 @@
       return true;
     }
 
-    setSpeaking(true, cueIndex);
-    window.dispatchEvent(
-      new CustomEvent("narrador-speak", {
-        detail: {
-          text,
-          rate: effectiveRate,
-          pitch: settings.pitch,
-          volume: settings.volume,
-          lang: ttsLangForCaptions(),
-          voiceURI: settings.voiceURI,
-        },
-      })
-    );
+    if (cueIndex >= 0) lastSpokenIndex = cueIndex;
+    speakBrowserTts(text, cueIndex, effectiveRate);
+    if (cueIndex >= 0 && cues[cueIndex]) {
+      lastSpokenLine = text;
+      lastSceneKey = sceneKeyFor(cues[cueIndex]);
+    }
+    const ms = Math.max(700, estimateSpeechSec(text, effectiveRate) * 1000);
+    speakTimer = setTimeout(() => {
+      speakTimer = null;
+      finishSpeechCycle();
+    }, ms);
+    updateUI();
     return true;
   }
 
@@ -789,9 +846,12 @@
     }
     clearPendingSpeakTimer();
     pendingSpeakIndex = -1;
-    if (useNative) {
+    if (useNative && settings.ttsEngine !== "browser") {
       chrome.runtime.sendMessage({ type: "NATIVE_CANCEL" });
     } else {
+      if (typeof speechSynthesis !== "undefined") {
+        speechSynthesis.cancel();
+      }
       window.dispatchEvent(new CustomEvent("narrador-cancel"));
     }
     resumeVideoAfterSpeech();
@@ -2649,7 +2709,7 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "GET_VOICES") {
-      if (useNative) {
+      if (useNative && settings.ttsEngine !== "browser") {
         chrome.runtime.sendMessage(
           { type: "LIST_NATIVE_VOICES", lang: settings.lang, engine: settings.ttsEngine || "edge" },
           (resp) => {
@@ -2662,8 +2722,8 @@
         );
         return true;
       }
-      requestVoices();
-      setTimeout(() => sendResponse({ native: false, voices: pageVoices }), 200);
+      updateBrowserVoices();
+      sendResponse({ native: false, voices: pageVoices });
       return true;
     }
 
@@ -2725,9 +2785,17 @@
     script.remove();
   }
 
+  document.addEventListener("yt-navigate-finish", () => {
+    const vid = getVideoId();
+    if (vid && vid !== lastVideoId) {
+      lastVideoId = null;
+      downloadingFor = null;
+    }
+  });
+
   loadSettings().then(async () => {
-    injectPageSpeech();
-    injectNavigateListener();
+    // injectPageSpeech(); // Bypassed to avoid CSP blocks - we now speak directly from content script
+    // injectNavigateListener(); // Bypassed to avoid CSP blocks - replaced by direct document listener above
     await checkNativeHost(true);
     if (useNative) voiceUnlocked = true;
     createWidget();

@@ -1,6 +1,7 @@
 const VOICE_GROUPS = [
   { type: "edge-neural", label: "Neuronales online (Microsoft Edge)" },
   { type: "local-neural", label: "Neuronales locales (RHVoice)" },
+  { type: "browser", label: "Navegador (Google TTS / Sistema)" },
 ];
 
 const PREVIEW_TEXT =
@@ -15,12 +16,13 @@ function voiceTypeOf(voice) {
   const uri = voice.voiceURI || voice.name || "";
   if (uri.startsWith("edge:") || /Neural$/i.test(uri)) return "edge-neural";
   if (uri.startsWith("local:") || uri.startsWith("rhvoice:")) return "local-neural";
+  if (uri.startsWith("browser:") || uri.startsWith("system:") || voice.localService !== undefined) return "browser";
   return "standard";
 }
 
 function isNeuralVoice(voice) {
   const t = voiceTypeOf(voice);
-  return t === "edge-neural" || t === "local-neural";
+  return t === "edge-neural" || t === "local-neural" || t === "browser";
 }
 
 function filterNeuralVoices(voices) {
@@ -28,12 +30,12 @@ function filterNeuralVoices(voices) {
 }
 
 function filterVoicesByEngine(voices, ttsEngine) {
-  const type = ttsEngine === "local" ? "local-neural" : "edge-neural";
+  const type = ttsEngine === "local" ? "local-neural" : ttsEngine === "edge" ? "edge-neural" : "browser";
   return filterNeuralVoices(voices).filter((v) => voiceTypeOf(v) === type);
 }
 
 function voicePrefixForEngine(ttsEngine) {
-  return ttsEngine === "local" ? "local:" : "edge:";
+  return ttsEngine === "local" ? "local:" : ttsEngine === "edge" ? "edge:" : "browser:";
 }
 
 function filterVoicesByLang(voices, langCode) {
