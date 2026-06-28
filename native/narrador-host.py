@@ -911,7 +911,7 @@ def transcode_to_standard(input_path, output_path, sample_rate=22050, channels=1
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
 
-def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_engine, cues):
+def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_engine, cues, audio_only=False):
     out_dir = os.path.expanduser("~/Descargas")
     if not os.path.isdir(out_dir):
         out_dir = os.path.expanduser("~/Downloads")
@@ -930,16 +930,17 @@ def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_eng
         if not clean_title:
             clean_title = video_id
 
-        # 2. Download video
+        # 2. Download video (only if not audio_only)
         video_temp_path = os.path.join(temp_dir, "original_video.mp4")
-        ytdl_cmd = [
-            "yt-dlp",
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "-o", video_temp_path,
-            "--no-playlist",
-            f"https://www.youtube.com/watch?v={video_id}"
-        ]
-        subprocess.run(ytdl_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not audio_only:
+            ytdl_cmd = [
+                "yt-dlp",
+                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "-o", video_temp_path,
+                "--no-playlist",
+                f"https://www.youtube.com/watch?v={video_id}"
+            ]
+            subprocess.run(ytdl_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         # 3. Generate audio files
         standard_cues = []
@@ -1020,6 +1021,16 @@ def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_eng
             "-y", narration_wav_path
         ]
         subprocess.run(concat_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        if audio_only:
+            final_audio_path = os.path.join(out_dir, f"{clean_title}.mp3")
+            encode_cmd = [
+                "ffmpeg", "-i", narration_wav_path,
+                "-codec:a", "libmp3lame", "-qscale:a", "2",
+                "-y", final_audio_path
+            ]
+            subprocess.run(encode_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return {"ok": True, "path": final_audio_path}
 
         audio_check_cmd = [
             "ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
@@ -1105,7 +1116,8 @@ def main():
                 message.get("volume", 1.0),
                 message.get("pitch", 1.0),
                 message.get("ttsEngine", "edge"),
-                message.get("cues", [])
+                message.get("cues", []),
+                audio_only=message.get("audioOnly", False)
             )
             write_message(result)
         elif action == "save_debug_html":

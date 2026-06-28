@@ -2291,12 +2291,12 @@
     downloadLocalFile(srt, `${getVideoId()}_traduccion.srt`, "text/srt");
   }
 
-  function requestVideoDownload() {
-    if (!cues.length) return alert("No hay subtítulos cargados para generar el vídeo.");
+  function requestVideoDownload(audioOnly) {
+    if (!cues.length) return alert("No hay subtítulos cargados.");
     const vid = getVideoId();
     if (!vid) return;
 
-    const downloadBtn = widget.querySelector(".btn-download-video");
+    const downloadBtn = widget.querySelector(audioOnly === true ? ".btn-download-mp3" : ".btn-download-video");
     const origText = downloadBtn.textContent;
     downloadBtn.textContent = "Preparando...";
     downloadBtn.disabled = true;
@@ -2310,15 +2310,16 @@
         volume: settings.volume,
         pitch: settings.pitch,
         ttsEngine: settings.ttsEngine,
+        audioOnly: Boolean(audioOnly),
         cues: cues.map(c => ({ startMs: c.startMs, endMs: c.endMs, text: c.text })),
       },
       (resp) => {
         downloadBtn.textContent = origText;
         downloadBtn.disabled = false;
         if (resp?.ok) {
-          alert(`¡Descarga iniciada! El vídeo traducido se guardará en: ${resp.path || "tu carpeta de descargas"}`);
+          alert(`¡Descarga iniciada! El archivo se guardará en: ${resp.path || "tu carpeta de descargas"}`);
         } else {
-          alert(`Error al descargar el vídeo: ${resp?.error || "desconocido"}`);
+          alert(`Error al descargar: ${resp?.error || "desconocido"}`);
         }
       }
     );
@@ -2349,7 +2350,8 @@
         <div class="narrador-downloads" style="margin-top: 5px; display: flex; gap: 4px; justify-content: center; border-top: 1px solid #444; padding-top: 5px;">
           <button type="button" class="btn-download-txt" style="font-size:10px; padding:2px 4px; background:#222; border:1px solid #555; color:#ccc; cursor:pointer;" title="Descargar traducción en TXT">TXT</button>
           <button type="button" class="btn-download-srt" style="font-size:10px; padding:2px 4px; background:#222; border:1px solid #555; color:#ccc; cursor:pointer;" title="Descargar traducción en SRT">SRT</button>
-          <button type="button" class="btn-download-video" style="font-size:10px; padding:2px 4px; background:#442222; border:1px solid #663333; color:#ffcccc; cursor:pointer;" title="Descargar vídeo con audio traducido">Descargar MP4</button>
+          <button type="button" class="btn-download-mp3" style="font-size:10px; padding:2px 4px; background:#224422; border:1px solid #336633; color:#ccffcc; cursor:pointer;" title="Descargar audio en MP3">MP3</button>
+          <button type="button" class="btn-download-video" style="font-size:10px; padding:2px 4px; background:#442222; border:1px solid #663333; color:#ffcccc; cursor:pointer;" title="Descargar vídeo con audio traducido">MP4</button>
         </div>
       </div>
       <button type="button" class="narrador-fab" title="Narrador YouTube">🔊</button>
@@ -2393,7 +2395,8 @@
 
     widget.querySelector(".btn-download-txt").addEventListener("click", exportTxt);
     widget.querySelector(".btn-download-srt").addEventListener("click", exportSrt);
-    widget.querySelector(".btn-download-video").addEventListener("click", requestVideoDownload);
+    widget.querySelector(".btn-download-video").addEventListener("click", () => requestVideoDownload(false));
+    widget.querySelector(".btn-download-mp3").addEventListener("click", () => requestVideoDownload(true));
 
     updateUI();
     if (uiTimer) clearInterval(uiTimer);
