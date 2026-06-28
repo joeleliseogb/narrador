@@ -1971,6 +1971,22 @@
 
     const langPref = getCaptionTargetLang();
 
+    const timeoutPromise = (promise, ms) => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), ms);
+        promise.then(
+          (val) => {
+            clearTimeout(timer);
+            resolve(val);
+          },
+          () => {
+            clearTimeout(timer);
+            resolve(null);
+          }
+        );
+      });
+    };
+
     try {
       for (let attempt = 0; attempt < 5; attempt++) {
         downloadAttemptNum = attempt + 1;
@@ -1978,10 +1994,10 @@
         if (attempt > 0) await sleep(1200 * attempt);
 
         const [direct, bg, page, panel] = await Promise.all([
-          fetchTranscriptDirect(videoId, langPref),
-          fetchTranscriptViaBackground(videoId, langPref),
-          downloadCaptionsViaPage(videoId, langPref),
-          downloadCaptionsViaTranscriptPanel(videoId, langPref),
+          timeoutPromise(fetchTranscriptDirect(videoId, langPref), 5000),
+          timeoutPromise(fetchTranscriptViaBackground(videoId, langPref), 5000),
+          timeoutPromise(downloadCaptionsViaPage(videoId, langPref), 5000),
+          timeoutPromise(downloadCaptionsViaTranscriptPanel(videoId, langPref), 12000),
         ]);
 
         let bestList = null;
