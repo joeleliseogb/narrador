@@ -129,30 +129,36 @@ function loadVoicesFromPage() {
   const engineLabel = engine === "local" ? "RHVoice local" : engine === "edge" ? "Edge online" : "Navegador";
 
   if (engine === "browser") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab?.id) {
+    const getBrowserVoicesLocal = () => {
+      if (typeof speechSynthesis === "undefined") {
         voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
-        setVoiceHint("Abre una pestaña compatible y recárgala (F5)", "warn");
+        setVoiceHint("API de voz no disponible.", "warn");
         return;
       }
-      chrome.tabs.sendMessage(tab.id, { type: "GET_VOICES" }, (voiceResp) => {
-        if (chrome.runtime.lastError) {
-          voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
-          setVoiceHint("Recarga la pestaña (F5) para activar voces locales", "warn");
-          return;
-        }
-        const voices = voiceResp?.voices || [];
-        const filtered = filterVoicesByEngine(voices, engine);
-        if (filtered.length) {
-          populateVoiceList(filtered);
-          setVoiceHint(`${filtered.length} voz(es) del navegador.`, "ok");
-        } else {
-          voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
-          setVoiceHint("Sin voces de navegador para este idioma.", "warn");
-        }
-      });
-    });
+      const list = speechSynthesis.getVoices() || [];
+      const formatted = list.map((v) => ({
+        name: v.name,
+        lang: v.lang,
+        voiceURI: v.voiceURI,
+        voiceType: "browser",
+        neural: v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Neural")
+      }));
+      let filtered = filterVoicesByEngine(formatted, engine);
+      filtered = filterVoicesByLang(filtered, langEl.value);
+      filtered = filterVisibleVoices(filtered, visibleVoices);
+      if (filtered.length) {
+        populateVoiceList(filtered);
+        setVoiceHint(`${filtered.length} voz(es) del navegador encontradas.`, "ok");
+      } else {
+        voiceEl.innerHTML = `<option value="">Automática (Navegador)</option>`;
+        setVoiceHint("Sin voces de navegador para este idioma.", "warn");
+      }
+    };
+
+    getBrowserVoicesLocal();
+    if (typeof speechSynthesis !== "undefined") {
+      speechSynthesis.onvoiceschanged = getBrowserVoicesLocal;
+    }
     return;
   }
 
