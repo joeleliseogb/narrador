@@ -932,9 +932,15 @@ def main():
                 message.get("engine", "edge"),
             )
             write_message(result if isinstance(result, dict) else {"ok": bool(result)})
-        elif action == "cancel":
-            cancel_speech()
-            write_message({"ok": True})
+        elif action == "save_debug_html":
+            html = message.get("html", "")
+            try:
+                debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_transcript.html")
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(html)
+                write_message({"ok": True, "path": debug_path})
+            except Exception as e:
+                write_message({"ok": False, "error": str(e)})
         else:
             write_message({"ok": False, "error": "unknown action"})
 

@@ -1657,6 +1657,10 @@
         fromPanel: true,
       };
     }
+    const container = document.querySelector("ytd-transcript-renderer") || document.querySelector("ytd-engagement-panel-section-list-renderer");
+    if (container) {
+      chrome.runtime.sendMessage({ type: "SAVE_DEBUG_HTML", html: container.outerHTML });
+    }
     return null;
   }
 

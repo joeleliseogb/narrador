@@ -236,6 +236,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "SAVE_DEBUG_HTML") {
+    chrome.runtime.sendNativeMessage(
+      NATIVE_HOST,
+      { action: "save_debug_html", html: message.html },
+      (r) => {
+        const err = chrome.runtime.lastError;
+        sendResponse(r || { ok: false, error: err?.message });
+      }
+    );
+    return true;
+  }
+
   if (message.type === "FETCH_TRANSCRIPT") {
     fetchTranscriptViaInnertube(message.videoId, message.lang)
       .then((payload) =>
