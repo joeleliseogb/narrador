@@ -40,43 +40,80 @@ EOF
 CHROMIUM_ID="${1:-}"
 EDGE_ID="${2:-}"
 
-if [[ -z "$CHROMIUM_ID" ]]; then
-  echo "=== Instalador del motor de voz nativo ==="
-  echo ""
-  echo "Necesitas el ID de la extensión en cada navegador donde la uses."
-  echo "  Brave:  brave://extensions/"
-  echo "  Chrome: chrome://extensions/"
-  echo "  Edge:   edge://extensions/"
-  echo "  (Modo desarrollador activado → copiar ID)"
-  echo ""
-  read -rp "ID Brave / Chrome / Chromium: " CHROMIUM_ID
+# Detectar si hay entorno gráfico y zenity disponible
+USE_GUI=false
+if [[ -z "$CHROMIUM_ID" && ( -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ) ]]; then
+  if command -v zenity &>/dev/null; then
+    USE_GUI=true
+  fi
+fi
 
+if [[ "$USE_GUI" == "true" ]]; then
+  CHROMIUM_ID=$(zenity --entry --title="Instalador Narrador YouTube" --text="Ingresa el ID de la extensión para Brave/Chrome (ej: clcghhgepahdgjlfkfkdodllfecojjee):" --entry-text="")
+  
   if [[ -z "$CHROMIUM_ID" ]]; then
-    read -rp "¿Solo Microsoft Edge? Pega el ID de Edge: " CHROMIUM_ID
-  fi
-
-  if [[ -z "$CHROMIUM_ID" ]]; then
-    echo "Error: hace falta al menos un ID."
-    exit 1
-  fi
-
-  if [[ ${#CHROMIUM_ID} -lt 20 ]]; then
-    echo "Error: el ID parece incompleto (suele tener 32 caracteres)."
-    exit 1
-  fi
-
-  echo ""
-  read -rp "ID de Edge (Enter = mismo ID; escribe 'no' para omitir Edge): " EDGE_ANSWER
-  if [[ -z "$EDGE_ANSWER" ]]; then
-    EDGE_ID="$CHROMIUM_ID"
-  elif [[ "${EDGE_ANSWER,,}" != "no" && "${EDGE_ANSWER,,}" != "n" ]]; then
-    EDGE_ID="$EDGE_ANSWER"
+    if zenity --question --title="Instalador Narrador YouTube" --text="¿Deseas configurar la extensión únicamente para Microsoft Edge?" --ok-label="Sí" --cancel-label="No"; then
+      EDGE_ID=$(zenity --entry --title="Instalador Narrador YouTube" --text="Ingresa el ID de la extensión para Microsoft Edge:" --entry-text="")
+      CHROMIUM_ID=""
+    else
+      zenity --error --title="Instalador Narrador YouTube" --text="Instalación cancelada: se requiere un ID de extensión."
+      exit 1
+    fi
+  else
+    if [[ ${#CHROMIUM_ID} -lt 20 ]]; then
+      zenity --error --title="Instalador Narrador YouTube" --text="Error: El ID ingresado es demasiado corto o inválido."
+      exit 1
+    fi
+    if zenity --question --title="Instalador Narrador YouTube" --text="¿Deseas usar la extensión también en Microsoft Edge con el mismo ID?" --ok-label="Sí" --cancel-label="No"; then
+      EDGE_ID="$CHROMIUM_ID"
+    else
+      if zenity --question --title="Instalador Narrador YouTube" --text="¿Quieres ingresar un ID diferente para Microsoft Edge?" --ok-label="Sí" --cancel-label="Omitir Edge"; then
+        EDGE_ID=$(zenity --entry --title="Instalador Narrador YouTube" --text="Ingresa el ID de la extensión para Microsoft Edge:" --entry-text="")
+      else
+        EDGE_ID=""
+      fi
+    fi
   fi
 else
-  if [[ -z "$EDGE_ID" ]]; then
-    EDGE_ID="$CHROMIUM_ID"
-  elif [[ "${EDGE_ID,,}" == "no" || "${EDGE_ID,,}" == "n" ]]; then
-    EDGE_ID=""
+  # Modo Texto normal (consola)
+  if [[ -z "$CHROMIUM_ID" ]]; then
+    echo "=== Instalador del motor de voz nativo ==="
+    echo ""
+    echo "Necesitas el ID de la extensión en cada navegador donde la uses."
+    echo "  Brave:  brave://extensions/"
+    echo "  Chrome: chrome://extensions/"
+    echo "  Edge:   edge://extensions/"
+    echo "  (Modo desarrollador activado → copiar ID)"
+    echo ""
+    read -rp "ID Brave / Chrome / Chromium: " CHROMIUM_ID
+
+    if [[ -z "$CHROMIUM_ID" ]]; then
+      read -rp "¿Solo Microsoft Edge? Pega el ID de Edge: " CHROMIUM_ID
+    fi
+
+    if [[ -z "$CHROMIUM_ID" ]]; then
+      echo "Error: hace falta al menos un ID."
+      exit 1
+    fi
+
+    if [[ ${#CHROMIUM_ID} -lt 20 ]]; then
+      echo "Error: el ID parece incompleto (suele tener 32 caracteres)."
+      exit 1
+    fi
+
+    echo ""
+    read -rp "ID de Edge (Enter = mismo ID; escribe 'no' para omitir Edge): " EDGE_ANSWER
+    if [[ -z "$EDGE_ANSWER" ]]; then
+      EDGE_ID="$CHROMIUM_ID"
+    elif [[ "${EDGE_ANSWER,,}" != "no" && "${EDGE_ANSWER,,}" != "n" ]]; then
+      EDGE_ID="$EDGE_ANSWER"
+    fi
+  else
+    if [[ -z "$EDGE_ID" ]]; then
+      EDGE_ID="$CHROMIUM_ID"
+    elif [[ "${EDGE_ID,,}" == "no" || "${EDGE_ID,,}" == "n" ]]; then
+      EDGE_ID=""
+    fi
   fi
 fi
 
