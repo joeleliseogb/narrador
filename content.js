@@ -1658,19 +1658,13 @@
       };
     }
     let debugHtml = "=== DOM PANELS DIAGNOSTIC ===\n\n";
-    const panels = document.querySelectorAll("ytd-engagement-panel-section-list-renderer");
-    debugHtml += `Found ${panels.length} engagement panels:\n`;
-    panels.forEach((p, idx) => {
-      debugHtml += `\n--- Panel ${idx} (target-id: ${p.getAttribute("target-id")}, visible: ${p.getAttribute("visibility")}) ---\n`;
-      debugHtml += p.outerHTML.substring(0, 3000) + "\n";
-    });
-    const segments = document.querySelectorAll("*[class*='transcript'], *[id*='transcript']");
-    debugHtml += `\nFound ${segments.length} transcript-related nodes:\n`;
-    segments.forEach((s, idx) => {
-      if (idx < 20) {
-        debugHtml += `Node ${idx}: ${s.tagName} class="${s.className}" id="${s.id}" text="${(s.textContent || "").substring(0, 100).trim()}"\n`;
-      }
-    });
+    const panel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]');
+    if (panel) {
+      debugHtml += "=== PAmodern_transcript_view HTML ===\n";
+      debugHtml += panel.outerHTML;
+    } else {
+      debugHtml += "PAmodern_transcript_view not found in DOM!";
+    }
     chrome.runtime.sendMessage({ type: "SAVE_DEBUG_HTML", html: debugHtml });
     return null;
   }
