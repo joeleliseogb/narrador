@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyUK8Gc647ZInpIL2jPC6YRbA24GbFJ/AZAYQZZj5SdWbvYUdZu4KC3QL4vCS5mvl9quYIisAuzwlm5FTgj0T9B+zJnMAZtBrry1TQ05ZRHppx7j42DXWYvYbMLJrHcZ8VsovYz3JVe4oVQrKlJbSPPYwzv5iDKfnJBnW369Ny+vHWiEPRjIPYP6vilSCR7P1lPvKh6JAObKQwtRaokLzIFXIwwxWpmiVTc9SIeO3bzIu4tIoebIkVymTzZtSzp4fy2GtpAEcVtQj480BVi7YAwBoCoXbG/bD08lMPUXIxsQ/miBVlXJrbzoSWnIW+Gco1UVt9+GV/kHwRL5yjfZ28QIDAQAB",
   "name": "Narrador de Subtítulos YouTube",
   "options_ui": {
     "page": "options.html",
