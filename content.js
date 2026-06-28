@@ -1684,235 +1684,118 @@
                   };
                 } else if (text.indexOf("WEBVTT") === 0) {
                   hit = { kind: "vtt", xml: text, count: (text.match(/\\n\\n/g) || []).length };
-                }
-                if (hit) {
-                  hit.languageCode = tlang || track.languageCode || langPref;
-                  hit.translated = Boolean(tlang);
-                  hit.sourceLanguageCode = track.languageCode;
-                  if (!bestLocal || scoreHit(hit) > scoreHit(bestLocal)) bestLocal = hit;
-                }
-              } catch (e) {}
-            }
-            return bestLocal;
-          }
-
-          async function fetchTimedText(lang, kind, tlang) {
-            var url = "/api/timedtext?v=" + encodeURIComponent(videoId)
-              + "&lang=" + encodeURIComponent(lang) + "&fmt=json3";
-            if (kind) url += "&kind=" + encodeURIComponent(kind);
-            if (tlang) url += "&tlang=" + encodeURIComponent(tlang);
-            try {
-              var text = await fetchUrl(url);
-              if (!text || text.charAt(0) !== "{") return null;
-              var data = JSON.parse(text);
-              if (data && data.events && data.events.length) {
-                return {
-                  kind: "json3",
-                  events: data.events,
-                  count: data.events.length,
-                  languageCode: tlang || lang,
-                  translated: Boolean(tlang),
-                  sourceLanguageCode: lang,
-                };
-              }
-            } catch (e) {}
-            return null;
-          }
-
-          function rankTracks(tracks) {
-            var same = tracks.filter(function (t) { return matchesLang(t, langPref); });
-            same.sort(function (a, b) {
-              var asrA = a.kind === "asr" ? 1 : 0;
-              var asrB = b.kind === "asr" ? 1 : 0;
-              if (asrA !== asrB) return asrA - asrB;
-              return (a.name && a.name.simpleText) ? 0 : 1;
-            });
-            return same;
-          }
-
-          function rankTranslatable(tracks) {
-            var pool = tracks.filter(function (t) {
-              return !matchesLang(t, langPref) && t.isTranslatable !== false;
-            });
-            pool.sort(function (a, b) {
-              var asrA = a.kind === "asr" ? 1 : 0;
-              var asrB = b.kind === "asr" ? 1 : 0;
-              if (asrA !== asrB) return asrA - asrB;
-              return 0;
-            });
-            return pool;
-          }
-
-          var best = null;
-
-          for (var attempt = 0; attempt < 8; attempt++) {
-            if (attempt > 0) await new Promise(function (r) { setTimeout(r, 400 * attempt); });
-
-            var androidHit = await fetchInnertubeAndroid();
-            if (androidHit && scoreHit(androidHit) > 8) {
-              if (!best || scoreHit(androidHit) > scoreHit(best)) best = androidHit;
-            }
-
-            var pr = getPR();
-            var tracks = (pr && pr.captions && pr.captions.playerCaptionsTracklistRenderer
-              && pr.captions.playerCaptionsTracklistRenderer.captionTracks) || [];
-
-            for (var tr = 0; tr < rankTranslatable(tracks).length; tr++) {
-              hit = await fetchTrack(rankTranslatable(tracks)[tr], langPref);
-              if (hit && (!best || scoreHit(hit) > scoreHit(best))) best = hit;
-              if (best && scoreHit(best) > 35) break;
-            }
-            for (var j = 0; j < rankTracks(tracks).length; j++) {
-              hit = await fetchTrack(rankTracks(tracks)[j]);
-              if (hit && (!best || scoreHit(hit) > scoreHit(best))) best = hit;
-              if (best && scoreHit(best) > 35) break;
-            }
-            if (best && scoreHit(best) > 8) break;
-
-            var langs = [langPref, "es", "es-419", "es-ES"];
-            if (langPref.indexOf("en") === 0) langs.push("en");
-            var kinds = ["", "asr"];
-            for (var li = 0; li < langs.length; li++) {
-              for (var ki = 0; ki < kinds.length; ki++) {
-                hit = await fetchTimedText(langs[li], kinds[ki]);
-                if (hit && (!best || scoreHit(hit) > scoreHit(best))) best = hit;
-                if (best && scoreHit(best) > 35) break;
-              }
-              if (best && scoreHit(best) > 35) break;
-            }
-            for (li = 0; li < langs.length; li++) {
-              if (matchesLang({ languageCode: langs[li] }, langPref)) continue;
-              for (ki = 0; ki < kinds.length; ki++) {
-                hit = await fetchTimedText(langs[li], kinds[ki], langPref);
-                if (hit && (!best || scoreHit(hit) > scoreHit(best))) best = hit;
-                if (best && scoreHit(best) > 35) break;
-              }
-              if (best && scoreHit(best) > 35) break;
-            }
-            if (best && scoreHit(best) > 8) break;
-          }
-
-          if (!best) {
-            window.postMessage({ type: "NARRADOR_CAPTION_DATA", payload: null }, "*");
-            return;
-          }
-
-          var out = {
-            languageCode: best.languageCode || langPref,
-            translated: Boolean(best.translated),
-            sourceLanguageCode: best.sourceLanguageCode || null,
-          };
-          if (best.kind === "json3") {
-            out.events = best.events;
-            window.postMessage({ type: "NARRADOR_CAPTION_DATA", payload: out }, "*");
-          } else {
-            out.xml = best.xml;
-            window.postMessage({ type: "NARRADOR_CAPTION_DATA", payload: out }, "*");
-          }
-        })();
-      `;
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
-    });
+  function getPlayerResponseFromDOM() {
+    const scripts = document.getElementsByTagName("script");
+    for (const script of scripts) {
+      const text = script.textContent;
+      if (!text) continue;
+      if (text.includes("ytInitialPlayerResponse")) {
+        const match = text.match(/ytInitialPlayerResponse\s*=\s*({.+?});/);
+        if (match) {
+          try {
+            return JSON.parse(match[1]);
+          } catch (e) {}
+        }
+      }
+    }
+    return null;
   }
 
-  function downloadCaptionsViaTranscriptPanel(videoId, langPref) {
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 22000);
-
-      function onMessage(ev) {
-        if (ev.source !== window || ev.data?.type !== "NARRADOR_TRANSCRIPT_PANEL") {
-          return;
+  async function downloadCaptionsViaPage(videoId, langPref) {
+    const pr = getPlayerResponseFromDOM();
+    if (!pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks) return null;
+    const tracks = pr.captions.playerCaptionsTracklistRenderer.captionTracks;
+    
+    function langMatches(tLang, pref) {
+      const lc = (tLang || "").toLowerCase();
+      return lc === pref || lc.indexOf(pref + "-") === 0;
+    }
+    
+    const same = tracks.filter((t) => langMatches(t.languageCode || t.lang, langPref));
+    same.sort((a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0));
+    
+    for (const track of same) {
+      try {
+        const url = track.baseUrl + (track.baseUrl.includes("?") ? "&" : "?") + "fmt=json3";
+        const resp = await fetch(url, { credentials: "include" });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data?.events?.length) {
+            return {
+              events: data.events,
+              languageCode: track.languageCode || langPref,
+              translated: false
+            };
+          }
         }
-        window.removeEventListener("message", onMessage);
-        clearTimeout(timeout);
-        resolve(ev.data.payload || null);
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  async function downloadCaptionsViaTranscriptPanel(videoId, langPref) {
+    function sleep(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    function openTranscript() {
+      const sels = [
+        'button[aria-label="Show transcript"]',
+        'button[aria-label="Mostrar transcripción"]',
+        'button[aria-label*="ranscript"]',
+        'button[aria-label*="ranscripción"]',
+      ];
+      for (const sel of sels) {
+        const b = document.querySelector(sel);
+        if (b) {
+          b.click();
+          return true;
+        }
       }
+      return false;
+    }
 
-      window.addEventListener("message", onMessage);
+    openTranscript();
 
-      const script = document.createElement("script");
-      script.textContent = `
-        (async function () {
-          var langPref = ${JSON.stringify(langPref)};
+    for (let attempt = 0; attempt < 16; attempt++) {
+      if (attempt > 0) await sleep(500 + attempt * 200);
+      const nodes = document.querySelectorAll("ytd-transcript-segment-renderer");
+      if (nodes.length < 3) continue;
 
-          function sleep(ms) {
-            return new Promise(function (r) { setTimeout(r, ms); });
-          }
+      const segments = [];
+      nodes.forEach((n) => {
+        const te = n.querySelector(".segment-timestamp");
+        const tx = n.querySelector("yt-formatted-string.segment-text, yt-formatted-string");
+        const text = (tx?.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text) return;
+        const p = (te?.textContent || "0:00").trim().split(":").map(Number);
+        let startMs = 0;
+        if (p.length === 3) startMs = (p[0] * 3600 + p[1] * 60 + p[2]) * 1000;
+        else if (p.length === 2) startMs = (p[0] * 60 + p[1]) * 1000;
+        segments.push({ startMs, endMs: startMs + 3000, text });
+      });
 
-          function openTranscript() {
-            var sels = [
-              'button[aria-label="Show transcript"]',
-              'button[aria-label="Mostrar transcripción"]',
-              'button[aria-label*="ranscript"]',
-              'button[aria-label*="ranscripción"]',
-            ];
-            for (var i = 0; i < sels.length; i++) {
-              var b = document.querySelector(sels[i]);
-              if (b) { b.click(); return true; }
-            }
-            return false;
-          }
+      if (segments.length < 3) continue;
+      for (let j = 0; j < segments.length - 1; j++) {
+        segments[j].endMs = segments[j + 1].startMs;
+      }
+      
+      const cues = segments.map((s, i) => ({
+        index: i,
+        startMs: s.startMs,
+        endMs: s.endMs,
+        durMs: s.endMs - s.startMs,
+        text: s.text,
+      }));
 
-          function looksSpanish(text) {
-            var s = (text || "").slice(0, 2000).toLowerCase();
-            if (/[áéíóúñ¿¡]/.test(s)) return true;
-            var es = (s.match(/\\b(el|la|los|las|que|de|en|un|una|por|con)\\b/g) || []).length;
-            var en = (s.match(/\\b(the|and|that|with|for|will|you)\\b/g) || []).length;
-            return es >= 4 && es > en * 1.1;
-          }
-
-          openTranscript();
-          for (var attempt = 0; attempt < 16; attempt++) {
-            if (attempt > 0) await sleep(500 + attempt * 200);
-            var nodes = document.querySelectorAll("ytd-transcript-segment-renderer");
-            if (nodes.length < 3) continue;
-            var segments = [];
-            nodes.forEach(function (n) {
-              var te = n.querySelector(".segment-timestamp");
-              var tx = n.querySelector(
-                "yt-formatted-string.segment-text, yt-formatted-string"
-              );
-              var text = (tx && tx.textContent || "").replace(/\\s+/g, " ").trim();
-              if (!text) return;
-              var p = (te && te.textContent || "0:00").trim().split(":").map(Number);
-              var startMs = 0;
-              if (p.length === 3) startMs = (p[0] * 3600 + p[1] * 60 + p[2]) * 1000;
-              else if (p.length === 2) startMs = (p[0] * 60 + p[1]) * 1000;
-              segments.push({ startMs: startMs, endMs: startMs + 3000, text: text });
-            });
-            if (segments.length < 3) continue;
-            for (var j = 0; j < segments.length - 1; j++) {
-              segments[j].endMs = segments[j + 1].startMs;
-            }
-            var sample = segments.slice(0, 25).map(function (s) { return s.text; }).join(" ");
-            if (langPref === "es" && !looksSpanish(sample)) continue;
-            var cues = segments.map(function (s, i) {
-              return {
-                index: i,
-                startMs: s.startMs,
-                endMs: s.endMs,
-                durMs: s.endMs - s.startMs,
-                text: s.text,
-              };
-            });
-            window.postMessage({
-              type: "NARRADOR_TRANSCRIPT_PANEL",
-              payload: {
-                cues: cues,
-                languageCode: langPref,
-                translated: true,
-                fromPanel: true,
-              },
-            }, "*");
-            return;
-          }
-          window.postMessage({ type: "NARRADOR_TRANSCRIPT_PANEL", payload: null }, "*");
-        })();
-      `;
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
-    });
+      return {
+        cues,
+        languageCode: langPref,
+        translated: true,
+        fromPanel: true,
+      };
+    }
+    return null;
   }
 
   function getVisibleCaptionText() {
