@@ -2371,7 +2371,7 @@
 
     if (isSpeaking) dot.classList.add("speaking");
 
-    if (!useNative) {
+    if (!useNative && settings.ttsEngine !== "browser") {
       status.classList.add("warn");
       status.textContent =
         "Motor Edge no conectado. Ejecuta native/install.sh y recarga la extensión.";
