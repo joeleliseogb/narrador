@@ -1621,13 +1621,13 @@
 
     for (let attempt = 0; attempt < 16; attempt++) {
       if (attempt > 0) await sleep(500 + attempt * 200);
-      const nodes = document.querySelectorAll("ytd-transcript-segment-renderer");
+      const nodes = document.querySelectorAll("transcript-segment-view-model, ytd-transcript-segment-renderer");
       if (nodes.length < 3) continue;
 
       const segments = [];
       nodes.forEach((n) => {
-        const te = n.querySelector(".segment-timestamp");
-        const tx = n.querySelector("yt-formatted-string.segment-text, yt-formatted-string");
+        const te = n.querySelector(".ytwTranscriptSegmentViewModelTimestamp, .segment-timestamp");
+        const tx = n.querySelector(".ytAttributedStringHost, span[role='text'], yt-formatted-string.segment-text, yt-formatted-string");
         const text = (tx?.textContent || "").replace(/\s+/g, " ").trim();
         if (!text) return;
         const p = (te?.textContent || "0:00").trim().split(":").map(Number);
