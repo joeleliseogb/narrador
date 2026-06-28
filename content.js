@@ -2257,6 +2257,79 @@
     updateUI();
   }
 
+  function formatSrtTime(ms) {
+    const hrs = Math.floor(ms / 3600000);
+    const mins = Math.floor((ms % 3600000) / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    const millis = ms % 1000;
+    return (
+      String(hrs).padStart(2, "0") + ":" +
+      String(mins).padStart(2, "0") + ":" +
+      String(secs).padStart(2, "0") + "," +
+      String(millis).padStart(3, "0")
+    );
+  }
+
+  function downloadLocalFile(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportTxt() {
+    if (!cues.length) return alert("No hay subtítulos cargados para exportar.");
+    const txt = cues.map((c) => c.text).join("\n");
+    downloadLocalFile(txt, `${getVideoId()}_traduccion.txt`, "text/plain");
+  }
+
+  function exportSrt() {
+    if (!cues.length) return alert("No hay subtítulos cargados para exportar.");
+    let srt = "";
+    cues.forEach((c, idx) => {
+      srt += `${idx + 1}\n`;
+      srt += `${formatSrtTime(c.startMs)} --> ${formatSrtTime(c.endMs)}\n`;
+      srt += `${c.text}\n\n`;
+    });
+    downloadLocalFile(srt, `${getVideoId()}_traduccion.srt`, "text/srt");
+  }
+
+  function requestVideoDownload() {
+    if (!cues.length) return alert("No hay subtítulos cargados para generar el vídeo.");
+    const vid = getVideoId();
+    if (!vid) return;
+
+    const downloadBtn = widget.querySelector(".btn-download-video");
+    const origText = downloadBtn.textContent;
+    downloadBtn.textContent = "Preparando...";
+    downloadBtn.disabled = true;
+
+    chrome.runtime.sendMessage(
+      {
+        type: "NATIVE_DOWNLOAD_VIDEO",
+        videoId: vid,
+        voice: settings.voiceURI,
+        rate: settings.rate,
+        volume: settings.volume,
+        pitch: settings.pitch,
+        ttsEngine: settings.ttsEngine,
+        cues: cues.map(c => ({ startMs: c.startMs, endMs: c.endMs, text: c.text })),
+      },
+      (resp) => {
+        downloadBtn.textContent = origText;
+        downloadBtn.disabled = false;
+        if (resp?.ok) {
+          alert(`¡Descarga iniciada! El vídeo traducido se guardará en: ${resp.path || "tu carpeta de descargas"}`);
+        } else {
+          alert(`Error al descargar el vídeo: ${resp?.error || "desconocido"}`);
+        }
+      }
+    );
+  }
+
   function createWidget() {
     if (document.getElementById("narrador-yt-widget")) return;
 
@@ -2278,6 +2351,11 @@
           <button type="button" class="btn-toggle">Activar</button>
           <button type="button" class="btn-test">Probar voz</button>
           <button type="button" class="btn-reload">Recargar subs</button>
+        </div>
+        <div class="narrador-downloads" style="margin-top: 5px; display: flex; gap: 4px; justify-content: center; border-top: 1px solid #444; padding-top: 5px;">
+          <button type="button" class="btn-download-txt" style="font-size:10px; padding:2px 4px; background:#222; border:1px solid #555; color:#ccc; cursor:pointer;" title="Descargar traducción en TXT">TXT</button>
+          <button type="button" class="btn-download-srt" style="font-size:10px; padding:2px 4px; background:#222; border:1px solid #555; color:#ccc; cursor:pointer;" title="Descargar traducción en SRT">SRT</button>
+          <button type="button" class="btn-download-video" style="font-size:10px; padding:2px 4px; background:#442222; border:1px solid #663333; color:#ffcccc; cursor:pointer;" title="Descargar vídeo con audio traducido">Descargar MP4</button>
         </div>
       </div>
       <button type="button" class="narrador-fab" title="Narrador YouTube">🔊</button>
@@ -2318,6 +2396,10 @@
         downloadCaptions(vid);
       }
     });
+
+    widget.querySelector(".btn-download-txt").addEventListener("click", exportTxt);
+    widget.querySelector(".btn-download-srt").addEventListener("click", exportSrt);
+    widget.querySelector(".btn-download-video").addEventListener("click", requestVideoDownload);
 
     updateUI();
     if (uiTimer) clearInterval(uiTimer);

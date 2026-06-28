@@ -48,6 +48,19 @@ async function nativeSpeak(msg) {
   });
 }
 
+async function nativeDownloadVideo(msg) {
+  return chrome.runtime.sendNativeMessage(NATIVE_HOST, {
+    action: "download_translated_video",
+    videoId: msg.videoId,
+    voice: msg.voice || "",
+    rate: msg.rate ?? 1.0,
+    volume: msg.volume ?? 1.0,
+    pitch: msg.pitch ?? 1.0,
+    ttsEngine: msg.ttsEngine || "edge",
+    cues: msg.cues || [],
+  });
+}
+
 async function nativeListVoices(lang, engine) {
   return chrome.runtime.sendNativeMessage(NATIVE_HOST, {
     action: "list_voices",
@@ -233,6 +246,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "NATIVE_CANCEL") {
     nativeCancel().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === "NATIVE_DOWNLOAD_VIDEO") {
+    nativeDownloadVideo(message)
+      .then((r) => {
+        const err = chrome.runtime.lastError;
+        sendResponse(r || { ok: false, error: err?.message });
+      })
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 

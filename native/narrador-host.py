@@ -891,6 +891,171 @@ def speak(text, lang="es", rate=1.0, pitch=1.0, volume=1.0, voice="", engine="ed
     return speak_edge(text, voice_name, rate, pitch, volume)
 
 
+def create_silence_wav(path, duration_sec, sample_rate=22050, channels=1):
+    import wave
+    num_frames = int(duration_sec * sample_rate)
+    with wave.open(str(path), 'wb') as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b'\x00' * (num_frames * channels * 2))
+
+
+def transcode_to_standard(input_path, output_path, sample_rate=22050, channels=1):
+    cmd = [
+        "ffmpeg", "-i", str(input_path),
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-y", str(output_path)
+    ]
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+
+def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_engine, cues):
+    out_dir = os.path.expanduser("~/Descargas")
+    if not os.path.isdir(out_dir):
+        out_dir = os.path.expanduser("~/Downloads")
+    if not os.path.isdir(out_dir):
+        out_dir = os.path.expanduser("~")
+
+    temp_dir = os.path.join(out_dir, f"narrador_temp_{video_id}")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    try:
+        # 1. Get title
+        info_cmd = ["yt-dlp", "--get-title", f"https://www.youtube.com/watch?v={video_id}"]
+        res = subprocess.run(info_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        title = res.stdout.strip()
+        clean_title = "".join(c for c in title if c.isalnum() or c in "._- ()").strip()
+        if not clean_title:
+            clean_title = video_id
+
+        # 2. Download video
+        video_temp_path = os.path.join(temp_dir, "original_video.mp4")
+        ytdl_cmd = [
+            "yt-dlp",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "-o", video_temp_path,
+            "--no-playlist",
+            f"https://www.youtube.com/watch?v={video_id}"
+        ]
+        subprocess.run(ytdl_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # 3. Generate audio files
+        standard_cues = []
+        current_time_ms = 0
+
+        for idx, cue in enumerate(cues):
+            start_ms = cue.get("startMs", 0)
+            text = cue.get("text", "")
+            if not text:
+                continue
+
+            gap_ms = start_ms - current_time_ms
+            if gap_ms > 0:
+                silence_file = os.path.join(temp_dir, f"silence_{idx}.wav")
+                create_silence_wav(silence_file, gap_ms / 1000.0)
+                standard_cues.append(silence_file)
+
+            tmp_cue_raw = os.path.join(temp_dir, f"cue_{idx}_raw.wav" if "rhvoice" in tts_engine.lower() or "local" in tts_engine.lower() else f"cue_{idx}_raw.mp3")
+
+            if "edge" in tts_engine.lower():
+                voice_id = edge_voice_id(voice)
+                edge_bin = edge_tts_bin()
+                if not voice_id or not edge_bin:
+                    raise Exception("Edge voice or binary not found")
+                cmd = [
+                    edge_bin,
+                    "--voice", voice_id,
+                    f"--rate={map_edge_rate(rate)}",
+                    f"--volume={map_edge_volume(volume)}",
+                    f"--pitch={map_edge_pitch(pitch)}",
+                    "--text", text,
+                    "--write-media", tmp_cue_raw
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+            else:
+                voice_name = local_voice_id(voice or "") or "mateo"
+                rh_bin = rhvoice_test_bin()
+                if not rh_bin:
+                    raise Exception("RHVoice binary not found")
+                cache_dir = narrador_cache_dir()
+                token = f"{os.getpid()}-{int(time.time() * 1000)}"
+                in_path = cache_dir / f"in-{token}.txt"
+                in_path.write_text(text, encoding="utf-8")
+                try:
+                    cmd = [rh_bin, "-p", voice_name, "-o", tmp_cue_raw, "-i", str(in_path)]
+                    cmd.extend(["-r", str(map_rhvoice_rate(rate))])
+                    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+                finally:
+                    if in_path.is_file():
+                        os.remove(in_path)
+
+            tmp_cue_std = os.path.join(temp_dir, f"cue_{idx}_std.wav")
+            transcode_to_standard(tmp_cue_raw, tmp_cue_std)
+
+            dur_cmd = [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", tmp_cue_std
+            ]
+            dur_res = subprocess.run(dur_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            dur_sec = float(dur_res.stdout.strip())
+
+            standard_cues.append(tmp_cue_std)
+            current_time_ms = start_ms + int(dur_sec * 1000)
+
+        if not standard_cues:
+            raise Exception("No cues were synthesized")
+
+        concat_list_path = os.path.join(temp_dir, "concat.txt")
+        with open(concat_list_path, "w", encoding="utf-8") as f:
+            for filepath in standard_cues:
+                f.write(f"file '{filepath}'\n")
+
+        narration_wav_path = os.path.join(temp_dir, "final_narration.wav")
+        concat_cmd = [
+            "ffmpeg", "-f", "concat", "-safe", "0",
+            "-i", concat_list_path,
+            "-ar", "22050", "-ac", "1",
+            "-y", narration_wav_path
+        ]
+        subprocess.run(concat_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        audio_check_cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1", video_temp_path
+        ]
+        audio_check_res = subprocess.run(audio_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        has_audio = "audio" in audio_check_res.stdout
+
+        final_video_path = os.path.join(out_dir, f"{clean_title}.mp4")
+
+        if has_audio:
+            mix_cmd = [
+                "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
+                "-filter_complex", "[0:a]volume=0.15[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[a]",
+                "-map", "0:v", "-map", "[a]",
+                "-c:v", "copy", "-c:a", "aac",
+                "-y", final_video_path
+            ]
+        else:
+            mix_cmd = [
+                "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "copy", "-c:a", "aac",
+                "-y", final_video_path
+            ]
+        subprocess.run(mix_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        return {"ok": True, "path": final_video_path}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        import shutil
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+
 def detect_engine():
     engines = detect_engines()
     return engines[0] if engines else None
@@ -932,6 +1097,17 @@ def main():
                 message.get("engine", "edge"),
             )
             write_message(result if isinstance(result, dict) else {"ok": bool(result)})
+        elif action == "download_translated_video":
+            result = download_translated_video_impl(
+                message.get("videoId", ""),
+                message.get("voice", ""),
+                message.get("rate", 1.0),
+                message.get("volume", 1.0),
+                message.get("pitch", 1.0),
+                message.get("ttsEngine", "edge"),
+                message.get("cues", [])
+            )
+            write_message(result)
         elif action == "save_debug_html":
             html = message.get("html", "")
             try:
