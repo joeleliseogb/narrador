@@ -342,13 +342,28 @@
 
   function checkNativeHost(force) {
     return new Promise((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          useNative = false;
+          resolve(false);
+        }
+      }, 800);
+
       try {
         if (!chrome.runtime || !chrome.runtime.sendMessage) {
+          clearTimeout(timer);
+          resolved = true;
           useNative = false;
           resolve(false);
           return;
         }
         chrome.runtime.sendMessage({ type: "CHECK_NATIVE", force: Boolean(force) }, (resp) => {
+          if (resolved) return;
+          clearTimeout(timer);
+          resolved = true;
+
           if (chrome.runtime.lastError) {
             useNative = false;
             resolve(false);
@@ -362,8 +377,12 @@
           resolve(useNative);
         });
       } catch (e) {
-        useNative = false;
-        resolve(false);
+        if (!resolved) {
+          clearTimeout(timer);
+          resolved = true;
+          useNative = false;
+          resolve(false);
+        }
       }
     });
   }
