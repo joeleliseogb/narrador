@@ -237,6 +237,12 @@ class BookNarratorGUI:
         style.map("Treeview", background=[("selected", "#3b82f6")], foreground=[("selected", "#ffffff")])
 
     def _setup_icon(self):
+        ico_path = ROOT / "icons" / "narrador.ico"
+        if sys.platform == "win32" and ico_path.is_file():
+            try:
+                self.root.iconbitmap(str(ico_path))
+            except Exception:
+                pass
         icon_path = ROOT / "icons" / "icon128.png"
         if icon_path.is_file():
             try:
