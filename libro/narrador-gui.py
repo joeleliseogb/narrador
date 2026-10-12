@@ -226,6 +226,11 @@ class BookNarratorGUI:
         # Etiqueta de resaltado de párrafo
         self.text_view.tag_configure("highlight", background="#c6960a", foreground="#ffffff")
 
+        # Eventos del visor de texto: sincronizar cursor con la frase para lectura interactiva
+        self.text_view.bind("<ButtonRelease-1>", lambda e: self.root.after(25, self._sync_cursor_to_chunk))
+        self.text_view.bind("<Double-Button-1>", lambda e: self.root.after(25, self._sync_cursor_to_chunk))
+        self.text_view.bind("<Key>", self._on_text_key)
+
         # 3. Panel inferior de reproducción y configuración
         bottom_card = ttk.Frame(self.root, style="Card.TFrame", padding=10)
         bottom_card.pack(fill=tk.X, padx=12, pady=(6, 12))
@@ -416,10 +421,12 @@ class BookNarratorGUI:
         if was_speaking:
             self.start_speech(from_section=idx, from_chunk=0)
 
-    def _display_section(self, idx: int):
+    def _display_section(self, idx: int, reset_chunk: bool = True):
         if idx < 0 or idx >= len(self.sections):
             return
         self.current_section_idx = idx
+        if reset_chunk:
+            self.current_chunk_idx = 0
         title, body = self.sections[idx]
         self.reading_title_lbl.configure(text=f"{idx + 1}. {title}")
         self.text_view.delete("1.0", tk.END)
@@ -428,14 +435,104 @@ class BookNarratorGUI:
         pct = int((idx + 1) / len(self.sections) * 100) if self.sections else 0
         self.page_indicator_lbl.configure(text=f"📍 Pág. {idx + 1}/{len(self.sections)} ({pct}%)")
 
-    def toggle_play(self):
-        if self.is_speaking:
-            if self.is_paused:
-                self.resume_speech()
+        chunks = libro_mod.get_section_chunks(body)
+        if chunks and 0 <= self.current_chunk_idx < len(chunks):
+            self._highlight_text(chunks[self.current_chunk_idx])
+
+    def _get_chunk_idx_at_cursor(self) -> int | None:
+        """Determina con exactitud qué frase u oración corresponde a la selección o cursor actual."""
+        if not self.sections or self.current_section_idx < 0:
+            return None
+        if self.current_section_idx >= len(self.sections):
+            return None
+
+        try:
+            sel_ranges = self.text_view.tag_ranges("sel")
+            if sel_ranges:
+                pos_index = sel_ranges[0]
             else:
-                self.pause_speech()
+                pos_index = self.text_view.index(tk.INSERT)
+            char_offset = len(self.text_view.get("1.0", pos_index))
+        except Exception:
+            return None
+
+        body = self.sections[self.current_section_idx][1]
+        chunks = libro_mod.get_section_chunks(body)
+        if not chunks:
+            return 0
+
+        cur_pos = 0
+        matched_idx = 0
+        for i, c in enumerate(chunks):
+            snippet = c[:30].strip()
+            found = body.find(snippet, cur_pos)
+            if found == -1:
+                snippet = c[:15].strip()
+                found = body.find(snippet, cur_pos)
+            if found != -1:
+                end = found + len(c)
+                cur_pos = found + max(1, len(snippet))
+                if char_offset <= end:
+                    return i
+                matched_idx = i
+            else:
+                end = cur_pos + len(c)
+                if char_offset <= end:
+                    return i
+                cur_pos = end
+                matched_idx = i
+
+        return matched_idx
+
+    def _sync_cursor_to_chunk(self):
+        """Sincroniza la frase activa con el párrafo donde el usuario hizo clic o marcó texto."""
+        chunk_idx = self._get_chunk_idx_at_cursor()
+        if chunk_idx is not None and 0 <= self.current_section_idx < len(self.sections):
+            self.current_chunk_idx = chunk_idx
+            body = self.sections[self.current_section_idx][1]
+            chunks = libro_mod.get_section_chunks(body)
+            if 0 <= chunk_idx < len(chunks):
+                chunk = chunks[chunk_idx]
+                self._highlight_text(chunk)
+                snippet = chunk[:55].strip()
+                if self.is_speaking and not self.is_paused:
+                    # Si ya está narrando, saltar la narración en vivo directamente a esta frase
+                    self.start_speech(from_section=self.current_section_idx, from_chunk=chunk_idx)
+                else:
+                    self.status_lbl.configure(
+                        text=f"📍 Cursor en frase {chunk_idx + 1}/{len(chunks)}: '{snippet}' (Espacio para leer)"
+                    )
+
+    def _on_text_key(self, event):
+        """Control de teclado dentro del visor de texto: lectura interactiva sin dañar el texto."""
+        if event.keysym in ("Left", "Right", "Up", "Down", "Prior", "Next", "Home", "End"):
+            self.root.after(25, self._sync_cursor_to_chunk)
+            return None
+        if event.state & 0x4:  # Atajos Ctrl+C, Ctrl+A
+            return None
+        if event.keysym == "space":
+            self.toggle_play()
+            return "break"
+        if event.keysym == "Escape":
+            self.stop_speech()
+            return "break"
+        return "break"
+
+    def toggle_play(self):
+        if not self.is_speaking:
+            cursor_chunk = self._get_chunk_idx_at_cursor()
+            target_chunk = cursor_chunk if cursor_chunk is not None else max(0, self.current_chunk_idx)
+            self.start_speech(from_section=self.current_section_idx, from_chunk=target_chunk)
+            return
+
+        if self.is_paused:
+            cursor_chunk = self._get_chunk_idx_at_cursor()
+            if cursor_chunk is not None and cursor_chunk != self.current_chunk_idx:
+                self.start_speech(from_section=self.current_section_idx, from_chunk=cursor_chunk)
+            else:
+                self.resume_speech()
         else:
-            self.start_speech()
+            self.pause_speech()
 
     def start_speech(self, from_section: int | None = None, from_chunk: int | None = None):
         if not self.sections:
@@ -446,7 +543,11 @@ class BookNarratorGUI:
         if target_sec < 0 or target_sec >= len(self.sections):
             target_sec = 0
 
-        target_chunk = from_chunk if from_chunk is not None else max(0, self.current_chunk_idx)
+        if from_chunk is None:
+            cursor_chunk = self._get_chunk_idx_at_cursor()
+            target_chunk = cursor_chunk if cursor_chunk is not None else max(0, self.current_chunk_idx)
+        else:
+            target_chunk = from_chunk
 
         # Cancelar inmediatamente cualquier reproducción previa
         self.speech_session_id += 1
