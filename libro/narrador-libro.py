@@ -341,6 +341,107 @@ def pdf_lines_to_body(text: str) -> str:
     return normalize_text(text)
 
 
+def clean_ocr_text(text: str) -> str:
+    if not text:
+        return ""
+    # Unir palabras cortadas por guion al final de línea
+    text = re.sub(r"(\w+)[-—]\s*\n\s*(\w+)", r"\1\2", text)
+    lines = []
+    for line in text.splitlines():
+        cleaned = line.strip()
+        # Filtrar artefactos aislados de ruido en escaneo
+        if re.fullmatch(r"[\W_]+", cleaned):
+            continue
+        lines.append(cleaned)
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def ocr_pixmap(pix, lang: str = "spa+eng") -> str:
+    """Ejecuta OCR sobre una imagen renderizada con Tesseract en español e inglés."""
+    try:
+        import pytesseract
+        from PIL import Image
+
+        tessdata = os.path.expanduser("~/.local/share/tessdata")
+        if os.path.isdir(tessdata):
+            os.environ["TESSDATA_PREFIX"] = tessdata
+
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        text = pytesseract.image_to_string(img, lang=lang)
+        return clean_ocr_text(text)
+    except Exception as e:
+        print(f"Aviso OCR: {e}", file=sys.stderr)
+        return ""
+
+
+def extract_tables_from_page(page) -> str:
+    """Detecta tablas estructuradas y estadísticas y las convierte en oraciones comprensibles al oído."""
+    try:
+        tabs = page.find_tables()
+        if not tabs or not tabs.tables:
+            return ""
+        out = []
+        for t_idx, tab in enumerate(tabs.tables, 1):
+            rows = tab.extract()
+            if not rows or len(rows) < 2:
+                continue
+            headers = [str(h or "").strip() for h in rows[0]]
+            out.append(f"\n[Tabla {t_idx}]:")
+            for r_idx, row in enumerate(rows[1:], 1):
+                cells = []
+                for c_idx, val in enumerate(row):
+                    val_str = str(val or "").strip()
+                    if val_str:
+                        col_name = headers[c_idx] if c_idx < len(headers) and headers[c_idx] else f"Columna {c_idx + 1}"
+                        cells.append(f"{col_name}: {val_str}")
+                if cells:
+                    out.append(f"Fila {r_idx}: " + "; ".join(cells) + ".")
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
+def extract_figures_and_diagrams(page, existing_text: str) -> str:
+    """Detecta imágenes de gráficas o estadísticas y extrae los textos y etiquetas embebidos con OCR."""
+    try:
+        image_list = page.get_images(full=True)
+        if not image_list:
+            return ""
+        doc = page.parent
+        fig_texts = []
+        import io
+        import pytesseract
+        from PIL import Image
+
+        tessdata = os.path.expanduser("~/.local/share/tessdata")
+        if os.path.isdir(tessdata):
+            os.environ["TESSDATA_PREFIX"] = tessdata
+
+        for img_idx, img_info in enumerate(image_list, 1):
+            xref = img_info[0]
+            base_img = doc.extract_image(xref)
+            if not base_img or not base_img.get("image"):
+                continue
+            width = base_img.get("width", 0)
+            height = base_img.get("height", 0)
+            # Descartar iconos o adornos pequeños
+            if width < 140 or height < 140:
+                continue
+
+            img = Image.open(io.BytesIO(base_img["image"]))
+            txt = pytesseract.image_to_string(img, lang="spa+eng").strip()
+            cleaned = clean_ocr_text(txt)
+            if cleaned and len(cleaned) > 12:
+                sample = cleaned[:30]
+                if sample not in existing_text:
+                    fig_texts.append(f"\n[Datos de Gráfica / Figura {img_idx}]:\n{cleaned}")
+        return "\n".join(fig_texts)
+    except Exception:
+        return ""
+
+
 def read_pdf_pymupdf(path: Path) -> list[tuple[str, str]] | None:
     try:
         import fitz
@@ -356,12 +457,37 @@ def read_pdf_pymupdf(path: Path) -> list[tuple[str, str]] | None:
                 "y guárdalo de nuevo, o exporta a TXT/EPUB."
             )
         for i, page in enumerate(doc):
-            text = normalize_text(page.get_text("text"))
-            if len(text) < 4:
-                continue
-            body = pdf_lines_to_body(text)
-            if body.strip():
-                sections.append((f"Página {i + 1}", body))
+            vector_text = normalize_text(page.get_text("text"))
+            tables_text = extract_tables_from_page(page)
+
+            # Si la página tiene menos de 50 caracteres vectoriales, es un escaneo o foto
+            is_scanned = len(vector_text.strip()) < 50
+            ocr_text = ""
+            if is_scanned:
+                # Renderizar página en alta resolución para OCR nítido
+                pix = page.get_pixmap(dpi=200)
+                ocr_text = ocr_pixmap(pix, lang="spa+eng")
+
+            # Si es texto normal pero contiene gráficas con datos incrustados
+            fig_text = ""
+            if not is_scanned:
+                fig_text = extract_figures_and_diagrams(page, vector_text)
+
+            parts = []
+            if ocr_text:
+                parts.append(ocr_text)
+            elif vector_text:
+                parts.append(pdf_lines_to_body(vector_text))
+
+            if tables_text:
+                parts.append(tables_text)
+            if fig_text:
+                parts.append(fig_text)
+
+            body = "\n\n".join(p for p in parts if p.strip()).strip()
+            if body:
+                label_suffix = " (OCR)" if is_scanned else ""
+                sections.append((f"Página {i + 1}{label_suffix}", body))
     finally:
         doc.close()
     return sections if sections else None
@@ -393,6 +519,26 @@ def read_pdf_poppler(path: Path) -> list[tuple[str, str]] | None:
     return sections if sections else None
 
 
+def read_image_file(path: Path) -> list[tuple[str, str]]:
+    """Lee archivos de imagen directa (escaneos, fotos, capturas) usando OCR."""
+    try:
+        import pytesseract
+        from PIL import Image
+
+        tessdata = os.path.expanduser("~/.local/share/tessdata")
+        if os.path.isdir(tessdata):
+            os.environ["TESSDATA_PREFIX"] = tessdata
+
+        img = Image.open(path)
+        text = pytesseract.image_to_string(img, lang="spa+eng")
+        cleaned = clean_ocr_text(text)
+        if cleaned.strip():
+            return [(f"Imagen: {path.name} (OCR)", cleaned)]
+    except Exception as e:
+        print(f"Error al leer imagen con OCR: {e}", file=sys.stderr)
+    return []
+
+
 def read_pdf(path: Path) -> list[tuple[str, str]]:
     sections = read_pdf_pymupdf(path)
     if sections:
@@ -402,10 +548,8 @@ def read_pdf(path: Path) -> list[tuple[str, str]]:
         return sections
 
     sys.exit(
-        "No se pudo leer el PDF.\n"
-        "  Opción A: pip install --user pymupdf\n"
-        "  Opción B: sudo dnf install poppler-utils   (pdftotext)\n"
-        "Si el PDF es solo imagen (escaneado), necesitas OCR antes (p. ej. OCRmyPDF)."
+        "No se pudo leer el PDF ni extraer texto.\n"
+        "Asegúrate de que el archivo no esté corrupto."
     )
 
 
@@ -419,9 +563,11 @@ def load_sections(path: Path) -> list[tuple[str, str]]:
         return read_pdf(path)
     if suffix in (".doc", ".docx", ".docm", ".odt", ".odf", ".rtf", ".wps"):
         return read_office(path)
+    if suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"):
+        return read_image_file(path)
     sys.exit(
         f"Formato no soportado: {suffix}. "
-        "Usa .txt, .epub, .pdf, .doc, .docx, .odt o .rtf."
+        "Usa .pdf, .epub, .txt, .docx, .odt o imágenes (.png, .jpg, .webp)."
     )
 
 

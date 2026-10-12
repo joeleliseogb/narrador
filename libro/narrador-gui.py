@@ -273,15 +273,16 @@ class BookNarratorGUI:
 
     def open_file_dialog(self):
         filetypes = [
-            ("Documentos soportados", "*.pdf *.epub *.txt *.docx *.doc *.odt *.rtf"),
-            ("Archivos PDF", "*.pdf"),
+            ("Documentos e Imágenes (con OCR)", "*.pdf *.epub *.txt *.docx *.doc *.odt *.rtf *.png *.jpg *.jpeg *.webp *.tiff *.bmp"),
+            ("Archivos PDF (con OCR y Tablas)", "*.pdf"),
+            ("Imágenes y Escaneos (OCR)", "*.png *.jpg *.jpeg *.webp *.tiff *.bmp"),
             ("Libros EPUB", "*.epub"),
             ("Archivos de Texto", "*.txt"),
             ("Documentos Word", "*.docx *.doc"),
             ("Documentos LibreOffice", "*.odt"),
             ("Todos los archivos", "*.*"),
         ]
-        chosen = filedialog.askopenfilename(title="Seleccionar libro o documento", filetypes=filetypes)
+        chosen = filedialog.askopenfilename(title="Seleccionar libro, documento o imagen escaneada", filetypes=filetypes)
         if not chosen:
             return
 
@@ -290,36 +291,48 @@ class BookNarratorGUI:
     def load_file(self, path: Path):
         self.stop_speech()
         self.current_file = path
-        self.file_info_lbl.configure(text=f"Cargando: {path.name}…")
+        self.file_info_lbl.configure(text=f"Analizando {path.name} (OCR automático si hay imágenes/tablas)…")
+        self.status_lbl.configure(text="Extrayendo texto y aplicando OCR si es necesario…")
         self.root.update_idletasks()
 
-        try:
-            sections = libro_mod.load_sections(path)
-            if not sections:
-                messagebox.showwarning("Sin contenido", "No se pudo extraer texto del documento seleccionado.")
-                return
+        def load_worker():
+            try:
+                sections = libro_mod.load_sections(path)
+                def on_done():
+                    if not sections:
+                        messagebox.showwarning("Sin contenido", "No se pudo extraer texto del documento o imagen.")
+                        self.file_info_lbl.configure(text="Sin texto legible.")
+                        self.status_lbl.configure(text="Listo.")
+                        return
 
-            self.sections = sections
-            self.current_section_idx = 0
-            self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones)")
+                    self.sections = sections
+                    self.current_section_idx = 0
+                    has_ocr = any("(OCR)" in title for title, _ in sections)
+                    ocr_note = " · con OCR" if has_ocr else ""
+                    self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones{ocr_note})")
 
-            # Llenar árbol
-            self.tree.delete(*self.tree.get_children())
-            for i, (title, body) in enumerate(self.sections):
-                chars = len(body)
-                self.tree.insert("", tk.END, iid=str(i), text=f"{i + 1}. {title}", values=(f"{chars:,} c.",))
+                    # Llenar árbol
+                    self.tree.delete(*self.tree.get_children())
+                    for i, (title, body) in enumerate(self.sections):
+                        chars = len(body)
+                        self.tree.insert("", tk.END, iid=str(i), text=f"{i + 1}. {title}", values=(f"{chars:,} c.",))
 
-            # Seleccionar la primera sección
-            if self.sections:
-                self.tree.selection_set("0")
-                self.tree.see("0")
-                self._display_section(0)
+                    if self.sections:
+                        self.tree.selection_set("0")
+                        self.tree.see("0")
+                        self._display_section(0)
 
-            self.status_lbl.configure(text=f"Cargado {path.name}. Listo para narrar.")
+                    self.status_lbl.configure(text=f"Cargado con éxito: {path.name}. Listo para narrar o crear MP3.")
 
-        except Exception as e:
-            messagebox.showerror("Error al cargar", f"Error al procesar el archivo:\n{e}")
-            self.file_info_lbl.configure(text="Error al cargar archivo")
+                self.root.after(0, on_done)
+            except Exception as e:
+                def on_err():
+                    messagebox.showerror("Error al cargar", f"Error al procesar el archivo:\n{e}")
+                    self.file_info_lbl.configure(text="Error al cargar archivo")
+                    self.status_lbl.configure(text="Error.")
+                self.root.after(0, on_err)
+
+        threading.Thread(target=load_worker, daemon=True).start()
 
     def _on_tree_select(self, event=None):
         selected = self.tree.selection()
