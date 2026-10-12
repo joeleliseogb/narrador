@@ -1135,6 +1135,10 @@ def main():
                 export_volume=message.get("exportVolume", 0.0)
             )
             write_message(result)
+        elif action == "open_book_gui":
+            gui_script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "libro", "narrador-gui.py")
+            subprocess.Popen([sys.executable, gui_script])
+            write_message({"ok": True})
         elif action == "save_debug_html":
             html = message.get("html", "")
             try:

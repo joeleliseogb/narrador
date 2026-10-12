@@ -109,19 +109,25 @@ Tras instalar, reinicia Brave y elige la voz RHVoice en el selector **Voz** del 
 - Volumen, tono y velocidad funcionan con el motor nativo (`spd-say`)
 - Solo funciona en páginas de YouTube (`youtube.com`)
 
-## Narrador de libros (TXT / EPUB / PDF / Word / ODT)
+## Narrador de libros y Audiolibros MP3 (PDF / EPUB / TXT / Word / ODT)
 
-Mismo motor de voz que YouTube, desde la terminal:
+### Aplicación con Interfaz Gráfica (GUI)
+Abre la aplicación visual con un clic:
+- Desde el popup de la extensión de Chrome: botón **«📖 Lector de Libros & Audiolibros MP3»**.
+- O desde el terminal / doble clic:
+  ```bash
+  ./narrador-libros.sh
+  ```
+- O buscándola en tu menú de aplicaciones: **«Narrador de Libros & Audiolibros»**.
 
+Te permite ver los capítulos, páginas, escuchar con resalte visual y **crear archivos de audiolibro en MP3**.
+
+### Desde la Terminal (CLI)
 ```bash
-pip install --user -r libro/requirements.txt
-
-python3 libro/narrador-libro.py capitulo.docx --engine edge --voice edge:es-ES-ElviraNeural
-python3 libro/narrador-libro.py mi-libro.pdf --from-chapter 10
-python3 libro/narrador-libro.py informe.odt --engine local --voice local:mateo
+python3 libro/narrador-libro.py mi-libro.pdf --engine local --voice local:mateo
 ```
 
-Detalles: [libro/README.md](libro/README.md)
+Detalles completos: [libro/README.md](libro/README.md)
 
 ## App Android
 

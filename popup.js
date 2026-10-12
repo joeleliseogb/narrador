@@ -479,4 +479,11 @@ testBtn.addEventListener("click", () => {
   });
 });
 
+const openBookBtn = document.getElementById("open-book-gui");
+if (openBookBtn) {
+  openBookBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "OPEN_BOOK_GUI" }, () => {});
+  });
+}
+
 chrome.storage.sync.get(DEFAULTS, populateForm);

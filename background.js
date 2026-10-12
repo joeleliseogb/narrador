@@ -329,6 +329,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "OPEN_BOOK_GUI") {
+    chrome.runtime.sendNativeMessage(
+      NATIVE_HOST,
+      { action: "open_book_gui" },
+      (r) => {
+        sendResponse(r || { ok: true });
+      }
+    );
+    return true;
+  }
+
   if (message.type === "FETCH_TRANSCRIPT") {
     fetchTranscriptViaInnertube(message.videoId, message.lang)
       .then((payload) =>

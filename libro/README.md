@@ -13,7 +13,25 @@ Lee **TXT, EPUB, PDF, Word (.doc/.docx), ODT y RTF** con el mismo motor que la e
   sudo dnf install antiword   # opcional, mejora .doc antiguos
   ```
 
-## Uso
+## Interfaz Gráfica (GUI con creador de MP3)
+
+Puedes abrir la aplicación visual con:
+```bash
+./narrador-libros.sh
+# o también:
+python3 libro/narrador-gui.py
+```
+*(También se instala en el menú de aplicaciones de tu sistema como **«Narrador de Libros & Audiolibros»**, y puedes abrirla con un clic desde el popup de la extensión de Chrome).*
+
+La interfaz gráfica te permite:
+- 📂 Abrir cualquier libro o documento (PDF, EPUB, TXT, Word DOCX, LibreOffice ODT).
+- 📑 Ver el índice, capítulos y páginas con el texto formateado.
+- ▶ Escuchar en vivo con resalte visual de los párrafos leídos.
+- 🎙️ **Crear y guardar audiolibros en MP3** (todo el libro o páginas seleccionadas).
+
+---
+
+## Uso desde Terminal (CLI)
 
 ```bash
 cd "/home/joel/Documentos/Code APP/Narrador"
