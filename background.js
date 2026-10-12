@@ -87,9 +87,9 @@ async function fetchCaptionFromTrackBase(baseUrl, meta) {
     base = `${base}${sep}tlang=${encodeURIComponent(meta.tlang)}`;
   }
   const urls = [
+    `${base}${base.includes("?") ? "&" : "?"}fmt=json3`,
     `${base}${base.includes("?") ? "&" : "?"}fmt=srv3`,
     `${base}${base.includes("?") ? "&" : "?"}fmt=vtt`,
-    `${base}${base.includes("?") ? "&" : "?"}fmt=json3`,
   ];
   for (const url of urls) {
     try {
@@ -163,6 +163,21 @@ async function fetchTranscriptViaInnertube(videoId, langPref) {
 
   const pref = (langPref || "es").split("-")[0].toLowerCase();
 
+  // 1. Native tracks in target language (e.g. Spanish)
+  const sameLang = tracks.filter((t) => langMatches(t.languageCode, pref));
+  const ordered = [...sameLang].sort(
+    (a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0)
+  );
+  for (const track of ordered) {
+    const hit = await fetchCaptionFromTrackBase(track.baseUrl, {
+      languageCode: track.languageCode || pref,
+      translated: false,
+      sourceLanguageCode: track.languageCode,
+    });
+    if (hit) return hit;
+  }
+
+  // 2. Foreign tracks translated by YouTube to target language
   const translatable = tracks.filter(
     (t) => !langMatches(t.languageCode, pref) && t.isTranslatable !== false
   );
@@ -179,13 +194,13 @@ async function fetchTranscriptViaInnertube(videoId, langPref) {
     if (hit) return hit;
   }
 
-  const sameLang = tracks.filter((t) => langMatches(t.languageCode, pref));
-  const ordered = [...sameLang].sort(
+  // 3. Fallback: Any available track in original language (to translate later)
+  const allOrdered = [...tracks].sort(
     (a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0)
   );
-  for (const track of ordered) {
+  for (const track of allOrdered) {
     const hit = await fetchCaptionFromTrackBase(track.baseUrl, {
-      languageCode: track.languageCode || pref,
+      languageCode: track.languageCode,
       translated: false,
       sourceLanguageCode: track.languageCode,
     });
@@ -193,6 +208,47 @@ async function fetchTranscriptViaInnertube(videoId, langPref) {
   }
 
   return null;
+}
+
+async function translateText(text, targetLang = "es") {
+  if (!text || !text.trim()) return text;
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return text;
+    const data = await resp.json();
+    if (Array.isArray(data?.[0])) {
+      return data[0].map((item) => item[0] || "").join("");
+    }
+  } catch (err) {
+    console.warn("[Narrador] translateText error:", err);
+  }
+  return text;
+}
+
+async function translateBatch(texts, targetLang = "es") {
+  if (!Array.isArray(texts) || !texts.length) return texts;
+  const CHUNK_SIZE = 25;
+  const results = [];
+  for (let i = 0; i < texts.length; i += CHUNK_SIZE) {
+    const chunk = texts.slice(i, i + CHUNK_SIZE);
+    const joined = chunk.join("\n");
+    let chunkOk = false;
+    try {
+      const translatedStr = await translateText(joined, targetLang);
+      const parts = translatedStr.split("\n");
+      if (parts.length === chunk.length) {
+        results.push(...parts.map((p) => p.trim()));
+        chunkOk = true;
+      }
+    } catch {}
+    if (!chunkOk) {
+      for (const t of chunk) {
+        results.push(await translateText(t, targetLang));
+      }
+    }
+  }
+  return results;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -293,6 +349,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => sendResponse({ ok: Boolean(data), data }))
       .catch(() => sendResponse({ ok: false, data: null }));
+    return true;
+  }
+
+  if (message.type === "TRANSLATE_TEXT") {
+    translateText(message.text, message.targetLang || "es")
+      .then((translated) => sendResponse({ ok: true, translated }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "TRANSLATE_BATCH") {
+    translateBatch(message.texts, message.targetLang || "es")
+      .then((translated) => sendResponse({ ok: true, translated }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 });

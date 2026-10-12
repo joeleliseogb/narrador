@@ -96,6 +96,26 @@
     fr: "francés",
     de: "alemán",
     pt: "portugués",
+    it: "italiano",
+    ru: "ruso",
+    ar: "árabe",
+    hi: "hindi",
+    nl: "neerlandés",
+    pl: "polaco",
+    tr: "turco",
+    uk: "ucraniano",
+    vi: "vietnamita",
+    sv: "sueco",
+    no: "noruego",
+    da: "danés",
+    fi: "finlandés",
+    el: "griego",
+    he: "hebreo",
+    id: "indonesio",
+    th: "tailandés",
+    cs: "checo",
+    ro: "rumano",
+    hu: "húngaro",
   };
 
   function langPrefCode() {
@@ -124,10 +144,16 @@
   }
 
   function ttsLangForCaptions() {
+    if (captionTranslated) {
+      return settings.lang || "es-ES";
+    }
     const code = (captionSourceLang || settings.lang || "es-ES").split("-")[0].toLowerCase();
     if (code === "es") return "es-ES";
     if (code === "en") return "en-US";
     if (code === "pt") return "pt-BR";
+    if (code === "fr") return "fr-FR";
+    if (code === "de") return "de-DE";
+    if (code === "it") return "it-IT";
     return settings.lang || "es-ES";
   }
 
@@ -135,7 +161,10 @@
     if (!captionSourceLang) return "";
     const pref = langPrefCode();
     const src = langLabel(captionSourceLang);
-    if (captionTranslated) return ` · ${src} (traducidos)`;
+    if (captionTranslated) {
+      if (langMatches(captionSourceLang, pref)) return ` · ${src}`;
+      return ` · ${src} → ${langLabel(pref)} (traducido)`;
+    }
     if (!langMatches(captionSourceLang, pref)) {
       return ` · ${src} (popup: ${langLabel(pref)})`;
     }
@@ -163,21 +192,23 @@
 
   function textLooksLikeLang(text, pref) {
     const sample = String(text || "")
-      .slice(0, 2500)
+      .slice(0, 3000)
       .toLowerCase();
     if (!sample.trim()) return false;
     if (pref === "es") {
       if (/[áéíóúñ¿¡]/.test(sample)) return true;
-      const es = (sample.match(/\b(el|la|los|las|que|de|en|un|una|por|con)\b/g) || [])
+      const es = (sample.match(/\b(el|la|los|las|que|de|en|un|una|unos|unas|por|con|para|como|es|son|se|su|sus|al|del|pero|mas|más|no|si|sí|yo|tu|tú|te|me|mi|mí|lo|le|ya|hay|muy|este|esta|esto|estos|estas|bien|todo|todos|toda|todas|cuando|donde|dónde|como|cómo)\b/g) || [])
         .length;
-      const en = (sample.match(/\b(the|and|that|with|for|will|you|your)\b/g) || [])
+      const en = (sample.match(/\b(the|and|that|with|for|will|you|your|is|are|was|were|this|have|from|they)\b/g) || [])
         .length;
-      if (es >= 4 && es > en * 1.1) return true;
-      if (en >= 6 && en > es * 1.3) return false;
-      return es >= 2;
+      const nonLatin = (sample.match(/[\u3040-\u30ff\u4e00-\u9fff\u0400-\u04ff\u0600-\u06ff\uac00-\ud7af]/g) || []).length;
+      if (nonLatin > 5 && es < 2) return false;
+      if (es >= 3 && es > en * 1.1) return true;
+      if (en >= 5 && en > es * 1.3) return false;
+      return es >= 1;
     }
     if (pref === "en") {
-      return (sample.match(/\b(the|and|that|with|for)\b/g) || []).length >= 3;
+      return (sample.match(/\b(the|and|that|with|for|you|this|are|was)\b/g) || []).length >= 2;
     }
     return true;
   }
@@ -1119,11 +1150,12 @@
         : avgLen * Math.sqrt(n) * (0.45 + spaced * 0.55);
     const code = payload?.languageCode || payload?.lang;
     const pref = langPrefCode();
-    if (payload?.fromPanel) score *= 4;
-    if (code && langMatches(code, pref)) score *= 2.5;
-    else if (payload?.translated && langMatches(code, pref)) score *= 2.5;
-    else if (code) score *= 0.02;
-    if (!payload?.fromPanel && !captionListMatchesLang(list, pref)) score *= 0.001;
+    const isTarget =
+      captionListMatchesLang(list, pref) ||
+      (code && langMatches(code, pref)) ||
+      (payload?.translated && langMatches(code, pref));
+    if (isTarget) score *= 2.5;
+    if (payload?.fromPanel) score *= 1.5;
     return score;
   }
 
@@ -1182,9 +1214,9 @@
       base = `${base}${sep}tlang=${encodeURIComponent(meta.tlang)}`;
     }
     const urls = [
+      `${base}${base.includes("?") ? "&" : "?"}fmt=json3`,
       `${base}${base.includes("?") ? "&" : "?"}fmt=srv3`,
       `${base}${base.includes("?") ? "&" : "?"}fmt=vtt`,
-      `${base}${base.includes("?") ? "&" : "?"}fmt=json3`,
     ];
     for (const url of urls) {
       try {
@@ -1222,6 +1254,28 @@
   }
 
   async function fetchTracksForLang(tracks, pref) {
+    let fallbackHit = null;
+    let anyRawHit = null;
+
+    // 1. Native tracks in target language (e.g. Spanish)
+    const sameLang = tracks.filter((t) => trackMatchesLang(t, pref));
+    const ordered = [...sameLang].sort(
+      (a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0)
+    );
+    for (const track of ordered) {
+      const hit = await fetchCaptionFromTrackBase(track.baseUrl, {
+        languageCode: track.languageCode || pref,
+        translated: false,
+        sourceLanguageCode: track.languageCode,
+      });
+      if (hit) {
+        const list = parseCaptionPayload(hit);
+        if (captionListMatchesLang(list, pref)) return hit;
+        if (!fallbackHit && list.length > 5) fallbackHit = hit;
+      }
+    }
+
+    // 2. Foreign tracks translated by YouTube tlang to target language
     const translatable = tracks.filter(
       (t) => !trackMatchesLang(t, pref) && t.isTranslatable !== false
     );
@@ -1238,25 +1292,30 @@
       if (hit) {
         const list = parseCaptionPayload(hit);
         if (captionListMatchesLang(list, pref)) return hit;
+        if (!fallbackHit && list.length > 5) fallbackHit = hit;
       }
     }
 
-    const sameLang = tracks.filter((t) => trackMatchesLang(t, pref));
-    const ordered = [...sameLang].sort(
+    // 3. Raw track in original language (fallback for batch translation)
+    const allOrdered = [...tracks].sort(
       (a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0)
     );
-    for (const track of ordered) {
+    for (const track of allOrdered) {
       const hit = await fetchCaptionFromTrackBase(track.baseUrl, {
-        languageCode: track.languageCode || pref,
+        languageCode: track.languageCode,
         translated: false,
         sourceLanguageCode: track.languageCode,
       });
       if (hit) {
         const list = parseCaptionPayload(hit);
-        if (captionListMatchesLang(list, pref)) return hit;
+        if (list.length > 5) {
+          anyRawHit = hit;
+          break;
+        }
       }
     }
-    return null;
+
+    return fallbackHit || anyRawHit;
   }
 
   function buildCaptionUrl(baseUrl) {
@@ -1568,32 +1627,8 @@
     const pr = getPlayerResponseFromDOM();
     if (!pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks) return null;
     const tracks = pr.captions.playerCaptionsTracklistRenderer.captionTracks;
-    
-    function langMatches(tLang, pref) {
-      const lc = (tLang || "").toLowerCase();
-      return lc === pref || lc.indexOf(pref + "-") === 0;
-    }
-    
-    const same = tracks.filter((t) => langMatches(t.languageCode || t.lang, langPref));
-    same.sort((a, b) => (a.kind === "asr" ? 1 : 0) - (b.kind === "asr" ? 1 : 0));
-    
-    for (const track of same) {
-      try {
-        const url = track.baseUrl + (track.baseUrl.includes("?") ? "&" : "?") + "fmt=json3";
-        const resp = await fetch(url, { credentials: "include" });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data?.events?.length) {
-            return {
-              events: data.events,
-              languageCode: track.languageCode || langPref,
-              translated: false
-            };
-          }
-        }
-      } catch (e) {}
-    }
-    return null;
+    const pref = (langPref || "es").split("-")[0].toLowerCase();
+    return await fetchTracksForLang(tracks, pref);
   }
 
   async function downloadCaptionsViaTranscriptPanel(videoId, langPref) {
@@ -1653,8 +1688,8 @@
 
       return {
         cues,
-        languageCode: langPref,
-        translated: true,
+        languageCode: "auto",
+        translated: false,
         fromPanel: true,
       };
     }
@@ -1887,16 +1922,35 @@
   function domSpeakNow(video, text) {
     if (!text || text === domLastSpokenText) return;
 
+    const pref = getCaptionTargetLang();
     const timeMs = video.currentTime * 1000;
     const estMs = Math.max(2200, Math.min(6000, text.length * 52));
+
+    domLastSpokenText = text;
+    pendingDomText = text;
+
+    if (!textLooksLikeLang(text, pref)) {
+      chrome.runtime.sendMessage(
+        { type: "TRANSLATE_TEXT", text, targetLang: pref },
+        (resp) => {
+          const finalText = (resp?.ok && resp?.translated) ? resp.translated : text;
+          const cue = {
+            startMs: domSceneStartVideoMs || timeMs,
+            endMs: (domSceneStartVideoMs || timeMs) + estMs,
+            text: finalText,
+          };
+          captionTranslated = true;
+          speakSceneCue(cue, -1, timeMs);
+        }
+      );
+      return;
+    }
+
     const cue = {
       startMs: domSceneStartVideoMs || timeMs,
       endMs: (domSceneStartVideoMs || timeMs) + estMs,
       text,
     };
-
-    domLastSpokenText = text;
-    pendingDomText = text;
     speakSceneCue(cue, -1, timeMs);
   }
 
@@ -1964,6 +2018,39 @@
     }
   }
 
+  async function translateCuesToTargetLang(cuesList, targetLang = "es") {
+    if (!cuesList || !cuesList.length) return cuesList;
+    const pref = (targetLang || "es").split("-")[0].toLowerCase();
+    const texts = cuesList.map((c) => c.text);
+    const BATCH_SIZE = 30;
+    const chunks = [];
+    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+      chunks.push(texts.slice(i, i + BATCH_SIZE));
+    }
+    const chunkResults = await Promise.all(
+      chunks.map(
+        (slice) =>
+          new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+              { type: "TRANSLATE_BATCH", texts: slice, targetLang: pref },
+              (resp) => {
+                if (chrome.runtime.lastError || !resp?.ok || !Array.isArray(resp?.translated)) {
+                  resolve(slice);
+                } else {
+                  resolve(resp.translated);
+                }
+              }
+            );
+          })
+      )
+    );
+    const translatedTexts = chunkResults.flat();
+    return cuesList.map((c, i) => ({
+      ...c,
+      text: translatedTexts[i] || c.text,
+    }));
+  }
+
   async function downloadCaptions(videoId) {
     if (downloadingFor === videoId) return;
 
@@ -2014,38 +2101,56 @@
         let bestPayload = null;
         let bestScore = 0;
 
+        let fallbackList = null;
+        let fallbackPayload = null;
+        let fallbackScore = 0;
+
         for (const payload of [panel, direct, bg, page]) {
           if (!payload) continue;
           const normalized =
             payload.cues?.length
               ? payload
               : payload.xml != null
-                ? { xml: payload.xml, languageCode: payload.languageCode, translated: payload.translated }
+                ? {
+                    xml: payload.xml,
+                    languageCode: payload.languageCode,
+                    translated: payload.translated,
+                    sourceLanguageCode: payload.sourceLanguageCode,
+                  }
                 : payload.events?.length
                   ? {
                       events: payload.events,
                       languageCode: payload.languageCode,
                       translated: payload.translated,
+                      sourceLanguageCode: payload.sourceLanguageCode,
                     }
                   : payload;
           const list = parseCaptionPayload(normalized);
-          if (!payload?.fromPanel && !captionListMatchesLang(list, langPref)) continue;
+          if (!list || list.length < 3) continue;
+
+          const matchesTarget =
+            captionListMatchesLang(list, langPref) ||
+            (payload.translated && langMatches(payload.languageCode, langPref));
+
           const score = scoreCaptionList(list, payload);
-          if (list.length > 5 && score > bestScore) {
-            const code = payload?.languageCode;
-            if (code && !langMatches(code, langPref) && !payload?.translated) {
-              continue;
-            }
+
+          if (matchesTarget && score > bestScore) {
             bestScore = score;
             bestList = list;
             bestPayload = payload;
+          } else if (score > fallbackScore) {
+            fallbackScore = score;
+            fallbackList = list;
+            fallbackPayload = payload;
           }
         }
 
         if (bestList?.length) {
           captionSourceLang =
-            bestPayload?.languageCode || langPref;
-          captionTranslated = Boolean(bestPayload?.translated);
+            bestPayload?.sourceLanguageCode || bestPayload?.languageCode || langPref;
+          captionTranslated = Boolean(
+            bestPayload?.translated || !langMatches(captionSourceLang, langPref)
+          );
           downloadRawSegments = bestList.length;
           cues = dedupeCues(mergeSceneCues(bestList));
           captionStatus = "ready";
@@ -2056,6 +2161,32 @@
           resetDomCaptionState();
           finishDownload(true);
           return;
+        }
+
+        if (fallbackList?.length) {
+          const srcCode =
+            fallbackPayload?.sourceLanguageCode ||
+            fallbackPayload?.languageCode ||
+            "auto";
+          captionSourceLang = srcCode;
+          captionStatus = "translating";
+          updateUI();
+
+          const translatedList = await translateCuesToTargetLang(fallbackList, langPref);
+          if (translatedList?.length) {
+            captionSourceLang = srcCode;
+            captionTranslated = true;
+            downloadRawSegments = translatedList.length;
+            cues = dedupeCues(mergeSceneCues(translatedList));
+            captionStatus = "ready";
+            const video = getVideoElement();
+            if (video) {
+              lastSpokenIndex = findLastCueIndexBefore(video.currentTime * 1000) - 1;
+            }
+            resetDomCaptionState();
+            finishDownload(true);
+            return;
+          }
         }
       }
     } catch (err) {
@@ -2447,6 +2578,8 @@
         }
         return `Descargando subtítulos ${attempt}/5 (${sec}s)${partial}`;
       }
+      case "translating":
+        return `Traduciendo subtítulos al ${langLabel(langPrefCode())}…`;
       case "ready":
         return shouldSceneLock()
           ? `✓ ${cues.length} escenas${captionDurationLabel()}${captionLangHint()} · sync bloqueada`
