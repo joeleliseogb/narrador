@@ -58,6 +58,7 @@ async function nativeDownloadVideo(msg) {
     pitch: msg.pitch ?? 1.0,
     ttsEngine: msg.ttsEngine || "edge",
     audioOnly: Boolean(msg.audioOnly),
+    exportVolume: msg.exportVolume ?? 0.0,
     cues: msg.cues || [],
   });
 }

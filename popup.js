@@ -15,6 +15,7 @@ const DEFAULTS = {
   muteVideoWhileNarrating: true,
   videoDuckVolume: 0.15,
   visibleVoices: [],
+  exportVolume: 0.0,
 };
 
 const enabledEl = document.getElementById("enabled");
@@ -23,6 +24,7 @@ const voiceEl = document.getElementById("voice");
 const rateEl = document.getElementById("rate");
 const pitchEl = document.getElementById("pitch");
 const volumeEl = document.getElementById("volume");
+const exportVolumeEl = document.getElementById("exportVolume");
 const autoEnableCCEl = document.getElementById("autoEnableCC");
 const pauseWhileLoadingSubsEl = document.getElementById("pauseWhileLoadingSubs");
 const autoSyncEl = document.getElementById("autoSync");
@@ -261,6 +263,10 @@ function populateForm(stored) {
     voiceEl.value = stored.voiceURI;
   }
 
+  if (exportVolumeEl) {
+    exportVolumeEl.value = String(stored.exportVolume ?? 0.0);
+  }
+
   loadVoicesFromPage();
   updateVoicePresetActive();
 }
@@ -413,6 +419,12 @@ document.querySelectorAll(".speed-preset").forEach((btn) => {
 
 bindRange(pitchEl, pitchValueEl, "pitch");
 bindRange(volumeEl, volumeValueEl, "volume");
+
+if (exportVolumeEl) {
+  exportVolumeEl.addEventListener("change", () => {
+    save({ exportVolume: parseFloat(exportVolumeEl.value) });
+  });
+}
 
 if (manageVoicesEl) manageVoicesEl.addEventListener("click", openVoiceOptions);
 if (manageVoicesFooterEl) manageVoicesFooterEl.addEventListener("click", openVoiceOptions);

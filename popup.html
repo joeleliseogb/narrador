@@ -134,6 +134,15 @@
       <input type="range" id="volume" min="0" max="1" step="0.1" value="1" />
     </section>
 
+    <section class="field">
+      <label for="exportVolume">Audio original en vídeo MP4 exportado</label>
+      <select id="exportVolume" style="width: 100%; padding: 4px; border-radius: 4px; border: 1px solid #555; background: #222; color: #ccc;">
+        <option value="0.0">Omitir audio original (solo voz neuronal)</option>
+        <option value="0.05">Audio original al 5% (fondo muy suave)</option>
+        <option value="0.15">Audio original al 15% (estándar)</option>
+      </select>
+    </section>
+
     <section class="toggle-row">
       <label for="pauseWhileLoadingSubs">Pausar vídeo mientras descarga subs</label>
       <input type="checkbox" id="pauseWhileLoadingSubs" checked />

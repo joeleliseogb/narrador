@@ -18,6 +18,7 @@
     muteVideoWhileNarrating: true,
     /** Volumen del vídeo mientras narra (0.15 = 15 %). */
     videoDuckVolume: 0.15,
+    exportVolume: 0.0,
   };
 
   const VIDEO_DUCK_VOLUME_DEFAULT = 0.15;
@@ -2325,6 +2326,7 @@
         pitch: settings.pitch,
         ttsEngine: settings.ttsEngine,
         audioOnly: Boolean(audioOnly),
+        exportVolume: settings.exportVolume ?? 0.0,
         cues: cues.map(c => ({ startMs: c.startMs, endMs: c.endMs, text: c.text })),
       },
       (resp) => {

@@ -911,7 +911,7 @@ def transcode_to_standard(input_path, output_path, sample_rate=22050, channels=1
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
 
-def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_engine, cues, audio_only=False):
+def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_engine, cues, audio_only=False, export_volume=0.0):
     out_dir = os.path.expanduser("~/Descargas")
     if not os.path.isdir(out_dir):
         out_dir = os.path.expanduser("~/Downloads")
@@ -1042,13 +1042,27 @@ def download_translated_video_impl(video_id, voice, rate, volume, pitch, tts_eng
         final_video_path = os.path.join(out_dir, f"{clean_title}.mp4")
 
         if has_audio:
-            mix_cmd = [
-                "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
-                "-filter_complex", "[0:a]volume=0.15[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[a]",
-                "-map", "0:v", "-map", "[a]",
-                "-c:v", "copy", "-c:a", "aac",
-                "-y", final_video_path
-            ]
+            try:
+                ev = float(export_volume)
+            except (ValueError, TypeError):
+                ev = 0.0
+
+            if ev <= 0.001:
+                # Omit original audio completely
+                mix_cmd = [
+                    "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy", "-c:a", "aac",
+                    "-y", final_video_path
+                ]
+            else:
+                mix_cmd = [
+                    "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
+                    "-filter_complex", f"[0:a]volume={ev}[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[a]",
+                    "-map", "0:v", "-map", "[a]",
+                    "-c:v", "copy", "-c:a", "aac",
+                    "-y", final_video_path
+                ]
         else:
             mix_cmd = [
                 "ffmpeg", "-i", video_temp_path, "-i", narration_wav_path,
@@ -1117,7 +1131,8 @@ def main():
                 message.get("pitch", 1.0),
                 message.get("ttsEngine", "edge"),
                 message.get("cues", []),
-                audio_only=message.get("audioOnly", False)
+                audio_only=message.get("audioOnly", False),
+                export_volume=message.get("exportVolume", 0.0)
             )
             write_message(result)
         elif action == "save_debug_html":
