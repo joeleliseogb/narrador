@@ -426,20 +426,39 @@ class BookNarratorGUI:
     def _load_voices(self):
         engine_str = self.engine_var.get()
         if "local" in engine_str:
-            voices = [
-                "local:mateo (Español - Masculino recomendado)",
-                "local:carlos (Español - Masculino)",
-                "local:leticia (Español - Femenina)",
-                "local:slt (Inglés nativo - Femenina)",
-                "local:bdl (Inglés nativo - Masculino)",
-                "local:clb (Inglés nativo - Femenina)",
-            ]
+            installed_rh = host.discover_rhvoice_voices() if hasattr(host, "discover_rhvoice_voices") else []
+            voices = []
+            for v in installed_rh:
+                uri = v.get("voiceURI", "")
+                vid = uri.replace("local:", "")
+                lang = v.get("lang", "")
+                if lang == "es":
+                    label = f"{uri} (Español - {vid.title()})"
+                elif lang == "en":
+                    label = f"{uri} (Inglés nativo - {vid.title()})"
+                else:
+                    label = f"{uri} ({lang.upper()} - {vid.title()})"
+                voices.append(label)
+
+            if not voices:
+                voices = [
+                    "local:mateo (Español - Mateo)",
+                    "local:slt (Inglés nativo - Slt)",
+                    "local:bdl (Inglés nativo - Bdl)",
+                    "local:clb (Inglés nativo - Clb)",
+                ]
         else:
             voices = [
-                "edge:es-ES-AlvaroNeural (Español España - Masculina)",
-                "edge:es-ES-ElviraNeural (Español España - Femenina)",
-                "edge:es-MX-JorgeNeural (Español México - Masculina)",
-                "edge:es-MX-DaliaNeural (Español México - Femenina)",
+                "edge:es-ES-ElviraNeural (España - Femenina recomendada)",
+                "edge:es-ES-AlvaroNeural (España - Masculina)",
+                "edge:es-MX-DaliaNeural (México - Femenina)",
+                "edge:es-MX-JorgeNeural (México - Masculina)",
+                "edge:es-AR-ElenaNeural (Argentina - Femenina)",
+                "edge:es-AR-TomasNeural (Argentina - Masculina)",
+                "edge:es-CO-SalomeNeural (Colombia - Femenina)",
+                "edge:es-CO-GonzaloNeural (Colombia - Masculina)",
+                "edge:es-US-PalomaNeural (EE.UU. - Femenina)",
+                "edge:es-US-AlonsoNeural (EE.UU. - Masculina)",
                 "edge:en-US-AndrewMultilingualNeural (Multilingüe Neural)",
                 "edge:en-US-AriaNeural (Inglés - Femenina)",
                 "edge:en-US-GuyNeural (Inglés - Masculina)",

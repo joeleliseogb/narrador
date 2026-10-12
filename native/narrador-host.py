@@ -52,6 +52,31 @@ RHVOICE_LANG_BY_ID = {
 }
 
 
+def ensure_edge_tts_patched():
+    """Asegura que edge_tts use el endpoint moderno api.msedgeservices.com para evitar errores 403."""
+    try:
+        import edge_tts.constants
+        import edge_tts.communicate
+        token = getattr(edge_tts.constants, "TRUSTED_CLIENT_TOKEN", "6A5AA1D4EAFF4E9FB37E23D68491D6F4")
+        new_wss = (
+            "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+            f"?Ocp-Apim-Subscription-Key={token}"
+        )
+        edge_tts.constants.WSS_URL = new_wss
+        edge_tts.communicate.WSS_URL = new_wss
+    except Exception:
+        pass
+
+
+def edge_tts_available():
+    try:
+        import edge_tts
+        ensure_edge_tts_patched()
+        return True
+    except ImportError:
+        return bool(edge_tts_bin())
+
+
 def edge_tts_candidates():
     home = Path.home()
     return (
@@ -252,7 +277,7 @@ def local_voice_id(name):
 
 def detect_engines():
     engines = []
-    if edge_tts_bin():
+    if edge_tts_available():
         engines.append("edge-tts")
     if rhvoice_available():
         engines.append("rhvoice")
@@ -773,7 +798,7 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
 
     voice_id = edge_voice_id(voice)
     edge_bin = edge_tts_bin()
-    if not voice_id or not edge_bin:
+    if not voice_id:
         return {"ok": False, "error": "no edge voice"}
 
     tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
@@ -782,36 +807,65 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
 
     try:
         gen_start = time.time()
-        cmd = [
-            edge_bin,
-            "--voice",
-            voice_id,
-            f"--rate={map_edge_rate(rate)}",
-            f"--volume={map_edge_volume(volume)}",
-            f"--pitch={map_edge_pitch(pitch)}",
-            "--text",
-            text,
-            "--write-media",
-            tmp_path,
-        ]
-        _gen_proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        generated = False
+        rc = 0
+        stdout = ""
+        stderr = ""
+
+        # 1. Intentar síntesis directa en Python con el parche anti-403
+        ensure_edge_tts_patched()
         try:
-            stdout, stderr = _gen_proc.communicate(timeout=120)
-            rc = _gen_proc.returncode
+            import asyncio
+            import edge_tts
+            async def _synth_async():
+                comm = edge_tts.Communicate(
+                    text,
+                    voice_id,
+                    rate=map_edge_rate(rate),
+                    volume=map_edge_volume(volume),
+                    pitch=map_edge_pitch(pitch),
+                )
+                await comm.save(tmp_path)
+            asyncio.run(_synth_async())
+            if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 128:
+                generated = True
         except Exception:
-            if _gen_proc:
-                try:
-                    _gen_proc.kill()
-                except Exception:
-                    pass
-            raise
-        finally:
-            _gen_proc = None
+            generated = False
+
+        # 2. Si no se generó vía Python, intentar mediante el binario CLI
+        if not generated:
+            if not edge_bin:
+                return {"ok": False, "error": "Motor edge-tts no disponible. Ejecuta: pip install edge-tts"}
+            cmd = [
+                edge_bin,
+                "--voice",
+                voice_id,
+                f"--rate={map_edge_rate(rate)}",
+                f"--volume={map_edge_volume(volume)}",
+                f"--pitch={map_edge_pitch(pitch)}",
+                "--text",
+                text,
+                "--write-media",
+                tmp_path,
+            ]
+            _gen_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                stdout, stderr = _gen_proc.communicate(timeout=120)
+                rc = _gen_proc.returncode
+            except Exception:
+                if _gen_proc:
+                    try:
+                        _gen_proc.kill()
+                    except Exception:
+                        pass
+                raise
+            finally:
+                _gen_proc = None
 
         generate_ms = int((time.time() - gen_start) * 1000)
 

@@ -1351,21 +1351,42 @@ def synthesize_chunk_to_mp3_file(
     rh_bin = host_mod.rhvoice_test_bin()
 
     # 1. Si es motor edge y edge-tts está disponible
-    if "edge" in engine.lower() and edge_bin:
+    if "edge" in engine.lower():
+        edge_v = host_mod.edge_voice_id(voice)
+        # Intentar síntesis directa en Python con el endpoint actualizado
+        if hasattr(host_mod, "ensure_edge_tts_patched"):
+            host_mod.ensure_edge_tts_patched()
         try:
-            edge_v = host_mod.edge_voice_id(voice)
-            cmd = [
-                edge_bin,
-                "--voice", edge_v,
-                f"--rate={host_mod.map_edge_rate(rate)}",
-                "--text", piece,
-                "--write-media", str(out_mp3),
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if res.returncode == 0 and out_mp3.is_file() and out_mp3.stat().st_size > 128:
+            import asyncio
+            import edge_tts
+            async def _save_chunk():
+                comm = edge_tts.Communicate(
+                    piece,
+                    edge_v,
+                    rate=host_mod.map_edge_rate(rate),
+                )
+                await comm.save(str(out_mp3))
+            asyncio.run(_save_chunk())
+            if out_mp3.is_file() and out_mp3.stat().st_size > 128:
                 return out_mp3
         except Exception:
             pass
+
+        # Fallback a CLI
+        if edge_bin:
+            try:
+                cmd = [
+                    edge_bin,
+                    "--voice", edge_v,
+                    f"--rate={host_mod.map_edge_rate(rate)}",
+                    "--text", piece,
+                    "--write-media", str(out_mp3),
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if res.returncode == 0 and out_mp3.is_file() and out_mp3.stat().st_size > 128:
+                    return out_mp3
+            except Exception:
+                pass
 
     # 2. RHVoice local directo a WAV y codificación a MP3
     if rh_bin:
