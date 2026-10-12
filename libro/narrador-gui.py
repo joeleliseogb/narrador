@@ -897,15 +897,24 @@ class BookNarratorGUI:
         dest_frame = ttk.LabelFrame(dialog, text="Archivo MP3 de salida", padding=10)
         dest_frame.pack(fill=tk.X, **pad)
 
+        default_dir = Path.home()
+        if self.current_file and self.current_file.parent.exists():
+            default_dir = self.current_file.parent
+        elif (Path.home() / "Documentos").exists():
+            default_dir = Path.home() / "Documentos"
+        elif (Path.home() / "Música").exists():
+            default_dir = Path.home() / "Música"
+
         default_name = f"{self.current_file.stem if self.current_file else 'audiolibro'}.mp3"
-        dest_var = tk.StringVar(value=str(Path.home() / "Música" / default_name))
-        
+        dest_var = tk.StringVar(value=str(default_dir / default_name))
+
         entry_dest = ttk.Entry(dest_frame, textvariable=dest_var)
         entry_dest.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
 
         def browse_dest():
             f = filedialog.asksaveasfilename(
                 title="Guardar audiolibro MP3 como...",
+                initialdir=str(default_dir),
                 initialfile=default_name,
                 defaultextension=".mp3",
                 filetypes=[("Archivos MP3", "*.mp3")],
@@ -928,16 +937,23 @@ class BookNarratorGUI:
         cancel_flag = [False]
 
         def do_export():
-            out_file = Path(dest_var.get())
-            if not out_file.parent.exists():
-                messagebox.showerror("Error", f"La carpeta de destino no existe:\n{out_file.parent}")
+            raw_dest = dest_var.get().strip()
+            if not raw_dest:
+                messagebox.showerror("Error", "Por favor especifica una ruta para guardar el archivo MP3.")
+                return
+
+            out_file = Path(raw_dest)
+            try:
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo crear la carpeta de destino:\n{e}")
                 return
 
             btn_start.configure(state=tk.DISABLED)
             btn_cancel.configure(text="Cancelar")
 
-            # Determinar secciones
-            if range_var.get() == "current":
+            # Determinar secciones a exportar
+            if range_var.get() == "current" and 0 <= self.current_section_idx < len(self.sections):
                 target_sections = [self.sections[self.current_section_idx]]
             else:
                 target_sections = self.sections
@@ -946,115 +962,54 @@ class BookNarratorGUI:
             rate = float(self.rate_scale.get())
 
             def worker():
-                cache = host.narrador_cache_dir()
-                rh_bin = host.rhvoice_test_bin()
-                temp_parts = []
-                total_sections = len(target_sections)
+                def on_progress(current_idx, total_count, text):
+                    self.root.after(0, lambda: (
+                        status_export_lbl.configure(text=text),
+                        prog_bar.configure(value=current_idx)
+                    ))
 
-                prog_bar["maximum"] = total_sections
+                self.root.after(0, lambda: prog_bar.configure(maximum=len(target_sections), value=0))
 
                 try:
-                    for i, (title, body) in enumerate(target_sections):
-                        if cancel_flag[0]:
-                            break
+                    success = libro_mod.export_book_to_mp3(
+                        sections=target_sections,
+                        out_file=out_file,
+                        voice=voice,
+                        engine=engine,
+                        rate=rate,
+                        doc_title=self.current_file.stem if self.current_file else "Audiolibro",
+                        multilingual=self.multilingual_var.get(),
+                        progress_callback=on_progress,
+                        cancel_check=lambda: cancel_flag[0],
+                    )
 
-                        status_export_lbl.configure(text=f"Sintetizando {i + 1}/{total_sections}: {title[:40]}…")
-                        prog_bar["value"] = i
-
-                        # Sintetizar párrafos de esta sección
-                        token = f"export-{os.getpid()}-{i}-{int(time.time()*1000)}"
-                        part_wav = cache / f"{token}.wav"
-                        part_mp3 = cache / f"{token}.mp3"
-
-                        # Sintetizar fragmentos de esta sección con soporte multilingüe
-                        chunks = libro_mod.get_section_chunks(clean_text)
-                        for c_idx, piece in enumerate(chunks):
-                            if cancel_flag[0]:
-                                break
-                            c_token = f"{token}-{c_idx}"
-                            c_wav = cache / f"{c_token}.wav"
-                            c_mp3 = cache / f"{c_token}.mp3"
-
-                            c_lang = libro_mod.detect_language(piece) if self.multilingual_var.get() else "es"
-                            spk_v, spk_l, spk_e = libro_mod.resolve_voice_for_chunk(c_lang, voice, engine)
-
-                            if spk_e == "edge":
-                                edge_bin = host.edge_tts_bin()
-                                if edge_bin:
-                                    cmd = [
-                                        edge_bin,
-                                        "--voice", host.edge_voice_id(spk_v),
-                                        f"--rate={host.map_edge_rate(rate)}",
-                                        "--text", piece,
-                                        "--write-media", str(c_mp3),
-                                    ]
-                                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                                    if proc.returncode == 0 and c_mp3.is_file() and c_mp3.stat().st_size > 128:
-                                        temp_parts.append(c_mp3)
-                                        continue
-
-                            # RHVoice local
-                            in_txt = cache / f"{c_token}.txt"
-                            in_txt.write_text(piece, encoding="utf-8")
-                            cmd_rh = [rh_bin, "-p", host.local_voice_id(spk_v) or "mateo", "-o", str(c_wav), "-i", str(in_txt)]
-                            proc_rh = subprocess.run(cmd_rh, capture_output=True, text=True, timeout=120)
-
-                            if c_wav.is_file() and c_wav.stat().st_size > 128:
-                                subprocess.run([
-                                    "ffmpeg", "-y", "-i", str(c_wav),
-                                    "-c:a", "libmp3lame", "-b:a", "128k",
-                                    str(c_mp3)
-                                ], capture_output=True, text=True)
-                                if c_mp3.is_file():
-                                    temp_parts.append(c_mp3)
-                            try:
-                                c_wav.unlink(missing_ok=True)
-                                in_txt.unlink(missing_ok=True)
-                            except Exception:
-                                pass
-
-                    if cancel_flag[0]:
-                        status_export_lbl.configure(text="Exportación cancelada.")
+                    def on_finish():
                         btn_start.configure(state=tk.NORMAL)
-                        return
+                        btn_cancel.configure(text="Cerrar")
+                        if cancel_flag[0]:
+                            status_export_lbl.configure(text="Exportación cancelada.")
+                            return
 
-                    status_export_lbl.configure(text="Uniendo fragmentos de audio…")
+                        if success and out_file.is_file() and out_file.stat().st_size > 512:
+                            prog_bar.configure(value=len(target_sections))
+                            status_export_lbl.configure(text=f"✓ Completado: {out_file.name}")
+                            messagebox.showinfo("¡Audiolibro Creado!", f"Audiolibro guardado con éxito en:\n\n{out_file}")
+                            dialog.destroy()
+                        else:
+                            status_export_lbl.configure(text="Error al generar el archivo MP3.")
+                            messagebox.showerror(
+                                "Error de exportación",
+                                "No se pudo generar el archivo MP3.\n"
+                                "Verifica que el motor de voz (RHVoice) y ffmpeg estén funcionando."
+                            )
 
-                    if not temp_parts:
-                        messagebox.showerror("Error", "No se generó ningún fragmento de audio.")
-                        return
-
-                    # Concatenar todos los fragmentos
-                    concat_list = cache / f"concat-{int(time.time())}.txt"
-                    with open(concat_list, "w", encoding="utf-8") as f:
-                        for p in temp_parts:
-                            f.write(f"file '{p.resolve()}'\n")
-
-                    title_meta = self.current_file.stem if self.current_file else "Audiolibro"
-                    cmd_concat = [
-                        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                        "-i", str(concat_list),
-                        "-c", "copy",
-                        "-metadata", f"title={title_meta}",
-                        "-metadata", "artist=Narrador Neuronal",
-                        str(out_file)
-                    ]
-                    subprocess.run(cmd_concat, capture_output=True, text=True)
-
-                    # Limpieza
-                    concat_list.unlink(missing_ok=True)
-                    for p in temp_parts:
-                        p.unlink(missing_ok=True)
-
-                    prog_bar["value"] = total_sections
-                    status_export_lbl.configure(text=f"✓ Completado: {out_file.name}")
-                    messagebox.showinfo("¡Audiolibro Creado!", f"Audiolibro guardado con éxito en:\n\n{out_file}")
-                    dialog.destroy()
-
+                    self.root.after(0, on_finish)
                 except Exception as ex:
-                    messagebox.showerror("Error de exportación", f"Ocurrió un error al generar el MP3:\n{ex}")
-                finally:
-                    btn_start.configure(state=tk.NORMAL)
+                    self.root.after(0, lambda: (
+                        messagebox.showerror("Error de exportación", f"Ocurrió un error inesperado al exportar:\n{ex}"),
+                        btn_start.configure(state=tk.NORMAL),
+                        btn_cancel.configure(text="Cerrar")
+                    ))
 
             threading.Thread(target=worker, daemon=True).start()
 

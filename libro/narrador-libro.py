@@ -1052,6 +1052,166 @@ def load_sections(path: Path, force_reload: bool = False) -> list[tuple[str, str
     return sections
 
 
+# =========================================================================
+# EXPORTACIÓN DE AUDIOLIBROS EN FORMATO MP3
+# =========================================================================
+
+def synthesize_chunk_to_mp3_file(
+    piece: str,
+    voice: str,
+    engine: str,
+    rate: float,
+    cache_dir: Path,
+    token: str,
+    host_mod,
+) -> Path | None:
+    piece = piece.strip()
+    if not piece:
+        return None
+
+    out_mp3 = cache_dir / f"{token}.mp3"
+    out_wav = cache_dir / f"{token}.wav"
+    in_txt = cache_dir / f"{token}.txt"
+
+    edge_bin = host_mod.edge_tts_bin()
+    rh_bin = host_mod.rhvoice_test_bin()
+
+    # 1. Si es motor edge y edge-tts está disponible
+    if "edge" in engine.lower() and edge_bin:
+        try:
+            edge_v = host_mod.edge_voice_id(voice)
+            cmd = [
+                edge_bin,
+                "--voice", edge_v,
+                f"--rate={host_mod.map_edge_rate(rate)}",
+                "--text", piece,
+                "--write-media", str(out_mp3),
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0 and out_mp3.is_file() and out_mp3.stat().st_size > 128:
+                return out_mp3
+        except Exception:
+            pass
+
+    # 2. RHVoice local directo a WAV y codificación a MP3
+    if rh_bin:
+        try:
+            in_txt.write_text(piece, encoding="utf-8")
+            rh_voice = host_mod.local_voice_id(voice) or "mateo"
+            cmd_rh = [
+                rh_bin,
+                "-p", rh_voice,
+                "-o", str(out_wav),
+                "-i", str(in_txt),
+                "-r", str(host_mod.map_rhvoice_rate(rate)),
+            ]
+            res = subprocess.run(cmd_rh, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0 and out_wav.is_file() and out_wav.stat().st_size > 128:
+                cmd_ff = [
+                    "ffmpeg", "-y", "-i", str(out_wav),
+                    "-c:a", "libmp3lame", "-b:a", "128k",
+                    str(out_mp3),
+                ]
+                res_ff = subprocess.run(cmd_ff, capture_output=True, text=True, timeout=60)
+                if res_ff.returncode == 0 and out_mp3.is_file() and out_mp3.stat().st_size > 128:
+                    return out_mp3
+        except Exception:
+            pass
+        finally:
+            out_wav.unlink(missing_ok=True)
+            in_txt.unlink(missing_ok=True)
+
+    return None
+
+
+def export_book_to_mp3(
+    sections: list[tuple[str, str]],
+    out_file: Path,
+    voice: str = "mateo",
+    engine: str = "local",
+    rate: float = 1.0,
+    doc_title: str = "Audiolibro",
+    multilingual: bool = True,
+    progress_callback=None,
+    cancel_check=None,
+) -> bool:
+    """
+    Sintetiza todas las secciones seleccionadas y las ensambla en un único archivo MP3 de alta calidad.
+    """
+    if not sections:
+        return False
+
+    out_file = Path(out_file).resolve()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    host_mod = load_tts()
+    cache = host_mod.narrador_cache_dir()
+    temp_parts: list[Path] = []
+    total = len(sections)
+
+    session_token = f"exp-{os.getpid()}-{int(time.time()*1000)}"
+
+    try:
+        for s_idx, (sec_title, sec_body) in enumerate(sections):
+            if cancel_check and cancel_check():
+                break
+
+            if progress_callback:
+                progress_callback(s_idx, total, f"Sintetizando sección {s_idx + 1}/{total}: {sec_title[:35]}…")
+
+            chunks = get_section_chunks(sec_body)
+            for c_idx, chunk in enumerate(chunks):
+                if cancel_check and cancel_check():
+                    break
+
+                chunk_token = f"{session_token}-s{s_idx}-c{c_idx}"
+                chunk_lang = detect_language(chunk) if multilingual else "es"
+                spk_v, spk_l, spk_e = resolve_voice_for_chunk(chunk_lang, voice, engine)
+
+                mp3_part = synthesize_chunk_to_mp3_file(
+                    chunk, spk_v, spk_e, rate, cache, chunk_token, host_mod
+                )
+                if mp3_part and mp3_part.is_file():
+                    temp_parts.append(mp3_part)
+
+        if cancel_check and cancel_check():
+            for p in temp_parts:
+                p.unlink(missing_ok=True)
+            return False
+
+        if not temp_parts:
+            return False
+
+        if progress_callback:
+            progress_callback(total, total, "Uniendo fragmentos de audio en el archivo final MP3…")
+
+        concat_list = cache / f"{session_token}-concat.txt"
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for p in temp_parts:
+                f.write(f"file '{p.resolve()}'\n")
+
+        cmd_concat = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(concat_list),
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            "-metadata", f"title={doc_title}",
+            "-metadata", "artist=Narrador Neuronal",
+            str(out_file)
+        ]
+        res = subprocess.run(cmd_concat, capture_output=True, text=True)
+        concat_list.unlink(missing_ok=True)
+
+        for p in temp_parts:
+            p.unlink(missing_ok=True)
+
+        return out_file.is_file() and out_file.stat().st_size > 512
+    except Exception as e:
+        print(f"Error en export_book_to_mp3: {e}", file=sys.stderr)
+        for p in temp_parts:
+            p.unlink(missing_ok=True)
+        return False
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Narra documentos (TXT, EPUB, PDF, Word, ODT, RTF) con RHVoice o Edge TTS."
@@ -1109,6 +1269,12 @@ def parse_args() -> argparse.Namespace:
         help="Exportar el texto extraído (con OCR) a un archivo de texto plano .txt y salir",
     )
     parser.add_argument(
+        "--export-mp3",
+        type=Path,
+        metavar="RUTA_MP3",
+        help="Sintetizar el documento completo a un archivo de audio MP3 y salir",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Solo listar secciones y fragmentos, sin hablar",
@@ -1161,6 +1327,26 @@ def main() -> int:
         export_sections_to_txt(sections, args.export_txt, doc_name=path.name, source_path=str(path))
         print(f"✅ Texto exportado correctamente a: {args.export_txt}")
         return 0
+
+    if args.export_mp3:
+        print(f"🎙️ Iniciando síntesis y exportación a MP3: {args.export_mp3}")
+        def on_cli_progress(curr, tot, msg):
+            print(f"   [{curr}/{tot}] {msg}")
+        ok = export_book_to_mp3(
+            sections,
+            args.export_mp3,
+            voice=voice,
+            engine=engine,
+            rate=args.rate,
+            doc_title=path.stem,
+            progress_callback=on_cli_progress,
+        )
+        if ok:
+            print(f"✅ Audiolibro MP3 generado exitosamente en: {args.export_mp3}")
+            return 0
+        else:
+            print(f"❌ Error al generar el audiolibro MP3.", file=sys.stderr)
+            return 1
 
     start = max(1, args.from_chapter) - 1
     if args.from_chapter == 1:
