@@ -1200,7 +1200,7 @@ class BookNarratorGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Guardar como Audiolibro MP3 (Opcional)")
-        dialog.geometry("540x440")
+        dialog.geometry("580x520")
         dialog.resizable(False, False)
         dialog.configure(bg=self.card_bg)
         dialog.transient(self.root)
@@ -1212,12 +1212,88 @@ class BookNarratorGUI:
         ttk.Label(dialog, text="💾 Guardar como MP3", style="Header.TLabel").pack(anchor=tk.W, **pad)
         ttk.Label(dialog, text="Crea un archivo de audio permanente en tu disco solo si deseas conservarlo.", style="Muted.TLabel").pack(anchor=tk.W, padx=16, pady=(0, 6))
 
-        range_frame = ttk.LabelFrame(dialog, text="Rango a guardar", padding=10)
+        range_frame = ttk.LabelFrame(dialog, text="Rango de páginas a guardar", padding=10)
         range_frame.pack(fill=tk.X, **pad)
 
+        total_pgs = len(self.sections)
         range_var = tk.StringVar(value="all")
-        ttk.Radiobutton(range_frame, text=f"Todo el libro ({len(self.sections)} páginas/secciones)", variable=range_var, value="all").pack(anchor=tk.W, pady=2)
-        ttk.Radiobutton(range_frame, text=f"Solo la página/sección actual ({self.current_section_idx + 1})", variable=range_var, value="current").pack(anchor=tk.W, pady=2)
+        custom_range_var = tk.StringVar(value="")
+
+        ttk.Radiobutton(
+            range_frame,
+            text=f"Todo el libro ({total_pgs} páginas)",
+            variable=range_var,
+            value="all",
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Radiobutton(
+            range_frame,
+            text=f"Solo la página actual (Página {self.current_section_idx + 1})",
+            variable=range_var,
+            value="current",
+        ).pack(anchor=tk.W, pady=2)
+
+        custom_row = ttk.Frame(range_frame)
+        custom_row.pack(anchor=tk.W, fill=tk.X, pady=(2, 0))
+
+        rb_custom = ttk.Radiobutton(
+            custom_row,
+            text="Rango personalizado:",
+            variable=range_var,
+            value="custom",
+        )
+        rb_custom.pack(side=tk.LEFT)
+
+        entry_custom_range = ttk.Entry(custom_row, textvariable=custom_range_var, width=28)
+        entry_custom_range.pack(side=tk.LEFT, padx=(8, 4))
+
+        range_feedback_lbl = ttk.Label(
+            range_frame,
+            text=f"Ej: 7-99, 107-301 (usa guión para rangos y comas para separar. Total: {total_pgs} págs)",
+            style="Muted.TLabel",
+        )
+        range_feedback_lbl.pack(anchor=tk.W, padx=22, pady=(2, 2))
+
+        def on_custom_entry_focus(event=None):
+            if range_var.get() != "custom":
+                range_var.set("custom")
+            validate_and_update_range_feedback()
+
+        entry_custom_range.bind("<FocusIn>", on_custom_entry_focus)
+
+        def validate_and_update_range_feedback(*args):
+            cur_mode = range_var.get()
+            if cur_mode != "custom":
+                range_feedback_lbl.configure(
+                    text=f"Ej: 7-99, 107-301 (usa guión para rangos y comas para separar. Total: {total_pgs} págs)",
+                    foreground="",
+                )
+                return
+
+            raw = custom_range_var.get().strip()
+            if not raw:
+                range_feedback_lbl.configure(
+                    text=f"Indica los rangos deseados. Ej: 7-99, 107-301 (Total: {total_pgs} págs)",
+                    foreground="",
+                )
+                return
+
+            try:
+                idxs = libro_mod.parse_page_ranges(raw, total_pgs)
+                sel_count = len(idxs)
+                excl_count = total_pgs - sel_count
+                range_feedback_lbl.configure(
+                    text=f"✓ {sel_count} págs seleccionadas ({excl_count} excluidas de {total_pgs} en total).",
+                    foreground="#10b981",
+                )
+            except ValueError as ex:
+                range_feedback_lbl.configure(
+                    text=f"⚠ {ex}",
+                    foreground="#ef4444",
+                )
+
+        custom_range_var.trace_add("write", validate_and_update_range_feedback)
+        range_var.trace_add("write", validate_and_update_range_feedback)
 
         # Opciones de idioma
         lang_frame = ttk.LabelFrame(dialog, text="Opciones de idioma", padding=10)
@@ -1295,6 +1371,23 @@ class BookNarratorGUI:
                 messagebox.showerror("Error", "Por favor especifica una ruta para guardar el archivo MP3.")
                 return
 
+            cur_mode = range_var.get()
+            custom_range_spec = custom_range_var.get().strip()
+            if cur_mode == "custom":
+                if not custom_range_spec:
+                    messagebox.showerror(
+                        "Rango de páginas requerido",
+                        "Por favor especifica las páginas a exportar en el campo de rango (ejemplo: 7-99, 107-301)."
+                    )
+                    entry_custom_range.focus_set()
+                    return
+                try:
+                    libro_mod.parse_page_ranges(custom_range_spec, len(self.sections))
+                except ValueError as err:
+                    messagebox.showerror("Rango de páginas inválido", str(err))
+                    entry_custom_range.focus_set()
+                    return
+
             out_file = Path(raw_dest)
             try:
                 out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1338,8 +1431,11 @@ class BookNarratorGUI:
                     else:
                         active_source = self.sections
 
-                    if range_var.get() == "current" and 0 <= self.current_section_idx < len(active_source):
+                    if cur_mode == "current" and 0 <= self.current_section_idx < len(active_source):
                         target_sections = [active_source[self.current_section_idx]]
+                    elif cur_mode == "custom":
+                        chosen_indices = libro_mod.parse_page_ranges(custom_range_spec, len(active_source))
+                        target_sections = [active_source[i] for i in chosen_indices]
                     else:
                         target_sections = active_source
 
@@ -1352,13 +1448,21 @@ class BookNarratorGUI:
                         if not any(sp_v in v_lower for sp_v in ("mateo", "carlos", "leticia", "es-")):
                             export_voice = "local:mateo" if "local" in engine else "edge:es-ES-ElviraNeural"
 
+                    doc_title_base = (self.current_file.stem if self.current_file else "Audiolibro")
+                    if cur_mode == "custom":
+                        doc_title_base += f" (Págs {custom_range_spec})"
+                    elif cur_mode == "current":
+                        doc_title_base += f" (Pág {self.current_section_idx + 1})"
+                    if use_spanish:
+                        doc_title_base += " (Español)"
+
                     success = libro_mod.export_book_to_mp3(
                         sections=target_sections,
                         out_file=out_file,
                         voice=export_voice,
                         engine=engine,
                         rate=rate,
-                        doc_title=(self.current_file.stem if self.current_file else "Audiolibro") + (" (Español)" if use_spanish else ""),
+                        doc_title=doc_title_base,
                         multilingual=not use_spanish,
                         progress_callback=on_progress,
                         cancel_check=lambda: cancel_flag[0],

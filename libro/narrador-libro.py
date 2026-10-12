@@ -1398,6 +1398,54 @@ def synthesize_chunk_to_mp3_file(
     return None
 
 
+def parse_page_ranges(range_str: str, max_pages: int) -> list[int]:
+    """
+    Parsea una especificación de páginas/rangos como '7-99, 107-301' o '1, 3, 5-10'.
+    Utiliza guiones (-) para rangos continuos y comas (,) para separar distintos rangos.
+    Retorna una lista de índices 0-based ordenados ascendentemente y sin duplicados.
+    Lanza ValueError con mensaje descriptivo si el formato o las páginas son inválidas.
+    """
+    range_str = (range_str or "").strip()
+    if not range_str:
+        raise ValueError("El rango de páginas no puede estar vacío.")
+
+    normalized = range_str.replace(";", ",")
+    parts = [p.strip() for p in normalized.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("No se encontraron páginas o rangos válidos.")
+
+    selected_pages = set()
+    for part in parts:
+        if "-" in part:
+            sub = [s.strip() for s in part.split("-")]
+            if len(sub) != 2 or not sub[0].isdigit() or not sub[1].isdigit():
+                raise ValueError(f"Rango inválido: '{part}'. Usa el formato 'inicio-fin' (ej: 7-99).")
+            start = int(sub[0])
+            end = int(sub[1])
+            if start > end:
+                start, end = end, start
+            if start < 1:
+                start = 1
+            if end > max_pages:
+                end = max_pages
+            if start <= max_pages:
+                for p in range(start, end + 1):
+                    selected_pages.add(p - 1)
+        else:
+            if not part.isdigit():
+                raise ValueError(f"Número de página inválido: '{part}'.")
+            p = int(part)
+            if 1 <= p <= max_pages:
+                selected_pages.add(p - 1)
+            else:
+                raise ValueError(f"Página fuera de límites: {p}. El documento tiene {max_pages} páginas (1 a {max_pages}).")
+
+    if not selected_pages:
+        raise ValueError(f"Ninguna de las páginas indicadas se encuentra dentro del documento (1 a {max_pages}).")
+
+    return sorted(selected_pages)
+
+
 def export_book_to_mp3(
     sections: list[tuple[str, str]],
     out_file: Path,
@@ -1554,6 +1602,15 @@ def parse_args() -> argparse.Namespace:
         help="Sintetizar el documento completo a un archivo de audio MP3 y salir",
     )
     parser.add_argument(
+        "--pages",
+        "--range",
+        dest="page_range",
+        type=str,
+        default="",
+        metavar="RANGOS",
+        help="Filtrar páginas o rangos específicos para narrar o exportar (ej: '7-99, 107-301')",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Solo listar secciones y fragmentos, sin hablar",
@@ -1614,6 +1671,14 @@ def main() -> int:
             progress_callback=on_cli_trans,
         )
         print(f"✅ Secciones procesadas en español ({len(sections)} secciones).")
+
+    if args.page_range:
+        try:
+            chosen_indices = parse_page_ranges(args.page_range, len(sections))
+            sections = [sections[i] for i in chosen_indices]
+            print(f"📑 Rango de páginas aplicado: {len(sections)} páginas seleccionadas según '{args.page_range}'.")
+        except ValueError as err:
+            sys.exit(f"❌ Error en el rango de páginas: {err}")
 
     if args.export_txt:
         export_sections_to_txt(sections, args.export_txt, doc_name=path.name, source_path=str(path))
