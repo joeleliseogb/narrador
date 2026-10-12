@@ -159,6 +159,12 @@ class BookNarratorGUI:
         self.btn_resume = ttk.Button(top_bar, text="📍 Reanudar", command=self.resume_last_book, style="Amber.TButton")
         self.btn_resume.pack(side=tk.LEFT, padx=4)
 
+        self.btn_export_txt = ttk.Button(top_bar, text="📄 Exportar TXT", command=self.export_txt_dialog, state=tk.DISABLED)
+        self.btn_export_txt.pack(side=tk.LEFT, padx=4)
+
+        self.btn_force_ocr = ttk.Button(top_bar, text="🔄 Re-analizar OCR", command=self.reload_force_ocr, state=tk.DISABLED)
+        self.btn_force_ocr.pack(side=tk.LEFT, padx=4)
+
         btn_export = ttk.Button(top_bar, text="💾 Guardar como MP3 (Opcional)", command=self.open_export_dialog, style="Green.TButton")
         btn_export.pack(side=tk.LEFT, padx=6)
 
@@ -340,11 +346,20 @@ class BookNarratorGUI:
 
         self.load_file(Path(chosen))
 
-    def load_file(self, path: Path):
+    def load_file(self, path: Path, force_reload: bool = False):
         self.stop_speech()
         self.current_file = path
-        self.file_info_lbl.configure(text=f"Analizando {path.name} (OCR automático si hay imágenes/tablas)…")
-        self.status_lbl.configure(text="Extrayendo texto y aplicando OCR si es necesario…")
+        is_from_cache = (not force_reload) and libro_mod.is_cached(path)
+
+        if is_from_cache:
+            self.file_info_lbl.configure(text=f"Cargando {path.name} desde caché instantáneo…")
+            self.status_lbl.configure(text="⚡ Cargando texto extraído previamente (sin demora de OCR)…")
+        elif force_reload:
+            self.file_info_lbl.configure(text=f"Re-analizando {path.name} (Forzando nuevo OCR)…")
+            self.status_lbl.configure(text="Re-escaneando documento con OCR y actualizando caché…")
+        else:
+            self.file_info_lbl.configure(text=f"Analizando {path.name} (OCR automático si hay imágenes/tablas)…")
+            self.status_lbl.configure(text="Extrayendo texto y aplicando OCR si es necesario…")
         self.root.update_idletasks()
 
         # Consultar marcador previo de este archivo
@@ -352,7 +367,7 @@ class BookNarratorGUI:
 
         def load_worker():
             try:
-                sections = libro_mod.load_sections(path)
+                sections = libro_mod.load_sections(path, force_reload=force_reload)
                 def on_done():
                     if not sections:
                         messagebox.showwarning("Sin contenido", "No se pudo extraer texto del documento o imagen.")
@@ -362,8 +377,10 @@ class BookNarratorGUI:
 
                     self.sections = sections
                     has_ocr = any("(OCR)" in title for title, _ in sections)
-                    ocr_note = " · con OCR" if has_ocr else ""
-                    self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones{ocr_note})")
+                    badge = " · ⚡ Caché instantáneo" if is_from_cache else (" · con OCR" if has_ocr else "")
+                    self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones{badge})")
+                    self.btn_export_txt.configure(state=tk.NORMAL)
+                    self.btn_force_ocr.configure(state=tk.NORMAL)
 
                     # Llenar árbol
                     self.tree.delete(*self.tree.get_children())
@@ -387,10 +404,11 @@ class BookNarratorGUI:
                     self.current_chunk_idx = start_chunk
                     self._select_tree_row(start_target)
 
+                    origin_str = " (⚡ Caché instantáneo)" if is_from_cache else ""
                     if is_resumed:
-                        self.status_lbl.configure(text=f"📍 Reanudando en {self.sections[start_target][0]} (último punto guardado)…")
+                        self.status_lbl.configure(text=f"📍 Reanudando en {self.sections[start_target][0]}{origin_str}…")
                     else:
-                        self.status_lbl.configure(text=f"Cargado: {path.name}. Narrando automáticamente…")
+                        self.status_lbl.configure(text=f"Cargado: {path.name}{origin_str}. Narrando automáticamente…")
 
                     self._update_resume_button()
                     # Iniciar narración inmediatamente después de analizar
@@ -405,6 +423,51 @@ class BookNarratorGUI:
                 self.root.after(0, on_err)
 
         threading.Thread(target=load_worker, daemon=True).start()
+
+    def export_txt_dialog(self):
+        if not self.sections or not self.current_file:
+            messagebox.showinfo("Aviso", "Primero abre un libro o documento.")
+            return
+
+        default_name = f"{self.current_file.stem}_texto_extraido.txt"
+        target = filedialog.asksaveasfilename(
+            title="Exportar texto plano extraído",
+            initialfile=default_name,
+            defaultextension=".txt",
+            filetypes=[("Archivo de texto plano (.txt)", "*.txt"), ("Todos los archivos", "*.*")],
+        )
+        if not target:
+            return
+
+        try:
+            target_path = Path(target)
+            libro_mod.export_sections_to_txt(
+                self.sections, target_path, doc_name=self.current_file.name, source_path=str(self.current_file.resolve())
+            )
+            messagebox.showinfo(
+                "Exportación exitosa",
+                f"El texto extraído de '{self.current_file.name}' se guardó en:\n\n{target_path}\n\n"
+                f"Contiene {len(self.sections)} páginas/secciones en texto plano listas para leer o editar."
+            )
+            self.status_lbl.configure(text=f"✅ Texto guardado en: {target_path.name}")
+        except Exception as e:
+            messagebox.showerror("Error al exportar", f"No se pudo guardar el archivo de texto:\n{e}")
+
+    def reload_force_ocr(self):
+        if not self.current_file:
+            messagebox.showinfo("Aviso", "No hay ningún documento abierto para re-analizar.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Re-analizar documento",
+            f"¿Deseas descartar el caché de texto y volver a ejecutar el análisis OCR completo sobre '{self.current_file.name}'?\n\n"
+            "Útil si el archivo en disco cambió o deseas volver a escanear tablas, diagramas e imágenes."
+        )
+        if not confirm:
+            return
+
+        libro_mod.clear_cache_for_file(self.current_file)
+        self.load_file(self.current_file, force_reload=True)
 
     def _on_tree_select(self, event=None):
         if self._programmatic_tree_select:

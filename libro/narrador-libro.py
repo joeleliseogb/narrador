@@ -10,7 +10,9 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -36,6 +38,138 @@ MAX_CHUNK = 480
 
 CONFIG_DIR = Path.home() / ".config" / "narrador-libros"
 PROGRESS_FILE = CONFIG_DIR / "progreso.json"
+CACHE_DIR = Path.home() / ".cache" / "narrador-libros" / "textos"
+
+
+# =========================================================================
+# CACHÉ DE DOCUMENTOS Y EXPORTACIÓN EN TEXTO PLANO
+# =========================================================================
+
+def get_cache_files(path: Path) -> tuple[Path, Path]:
+    """Retorna las rutas para el caché estructurado JSON y el archivo de texto plano .txt."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    resolved = str(path.resolve())
+    h = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
+    safe_name = re.sub(r"[^\w\.-]", "_", path.stem)[:32]
+    json_path = CACHE_DIR / f"{safe_name}_{h}.json"
+    txt_path = CACHE_DIR / f"{safe_name}_{h}.txt"
+    return json_path, txt_path
+
+
+def is_cached(path: Path) -> bool:
+    """Comprueba si existe un caché válido y actualizado para este documento."""
+    if not path.is_file():
+        return False
+    json_path, _ = get_cache_files(path)
+    if not json_path.is_file():
+        return False
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        stat = path.stat()
+        return (
+            data.get("file_path") == str(path.resolve())
+            and data.get("mtime_ns") == stat.st_mtime_ns
+            and data.get("size_bytes") == stat.st_size
+            and bool(data.get("sections"))
+        )
+    except Exception:
+        return False
+
+
+def load_cached_sections(path: Path) -> list[tuple[str, str]] | None:
+    """Carga las secciones extraídas directamente del caché en milisegundos."""
+    if not is_cached(path):
+        return None
+    json_path, _ = get_cache_files(path)
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        raw_sections = data.get("sections", [])
+        sections: list[tuple[str, str]] = []
+        for s in raw_sections:
+            if isinstance(s, dict):
+                title = str(s.get("title", ""))
+                body = str(s.get("body", ""))
+                if body.strip():
+                    sections.append((title, body))
+            elif isinstance(s, (list, tuple)) and len(s) == 2:
+                sections.append((str(s[0]), str(s[1])))
+        return sections if sections else None
+    except Exception as e:
+        print(f"Aviso leyendo caché: {e}", file=sys.stderr)
+        return None
+
+
+def save_cached_sections(path: Path, sections: list[tuple[str, str]]) -> tuple[Path, Path] | None:
+    """Guarda las secciones en caché JSON y en texto plano (.txt) para lectura instantánea."""
+    if not path.is_file() or not sections:
+        return None
+    try:
+        json_path, txt_path = get_cache_files(path)
+        stat = path.stat()
+        has_ocr = any("(OCR)" in title for title, _ in sections)
+
+        payload = {
+            "file_path": str(path.resolve()),
+            "file_name": path.name,
+            "mtime_ns": stat.st_mtime_ns,
+            "size_bytes": stat.st_size,
+            "has_ocr": has_ocr,
+            "cached_at": int(time.time()),
+            "sections_count": len(sections),
+            "sections": [{"title": title, "body": body} for title, body in sections],
+        }
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Generar versión en texto plano formateado
+        export_sections_to_txt(sections, txt_path, doc_name=path.name, source_path=str(path.resolve()))
+        return json_path, txt_path
+    except Exception as e:
+        print(f"Aviso guardando caché: {e}", file=sys.stderr)
+        return None
+
+
+def clear_cache_for_file(path: Path) -> None:
+    """Elimina el caché existente para forzar un re-análisis completo."""
+    try:
+        json_path, txt_path = get_cache_files(path)
+        if json_path.is_file():
+            json_path.unlink(missing_ok=True)
+        if txt_path.is_file():
+            txt_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def export_sections_to_txt(
+    sections: list[tuple[str, str]],
+    target_path: Path,
+    doc_name: str = "",
+    source_path: str = ""
+) -> None:
+    """Exporta las secciones a un archivo de texto plano (.txt) estructurado y legible."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = [
+        "=" * 78,
+        f"LIBRO / DOCUMENTO: {doc_name or target_path.stem}",
+    ]
+    if source_path:
+        lines.append(f"ORIGEN: {source_path}")
+    lines.extend([
+        f"FECHA DE EXTRACCIÓN: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"TOTAL DE PÁGINAS/SECCIONES: {len(sections)}",
+        "=" * 78,
+        "",
+    ])
+
+    for i, (title, body) in enumerate(sections, 1):
+        lines.append(f"--- [Sección {i} | {title}] ---")
+        lines.append(body.strip())
+        lines.append("")
+
+    target_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
 
 def load_bookmarks() -> dict:
@@ -890,22 +1024,32 @@ def read_pdf(path: Path) -> list[tuple[str, str]]:
     )
 
 
-def load_sections(path: Path) -> list[tuple[str, str]]:
+def load_sections(path: Path, force_reload: bool = False) -> list[tuple[str, str]]:
+    if not force_reload:
+        cached = load_cached_sections(path)
+        if cached:
+            return cached
+
     suffix = path.suffix.lower()
     if suffix == ".txt":
-        return read_txt(path)
-    if suffix == ".epub":
-        return read_epub(path)
-    if suffix == ".pdf":
-        return read_pdf(path)
-    if suffix in (".doc", ".docx", ".docm", ".odt", ".odf", ".rtf", ".wps"):
-        return read_office(path)
-    if suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"):
-        return read_image_file(path)
-    sys.exit(
-        f"Formato no soportado: {suffix}. "
-        "Usa .pdf, .epub, .txt, .docx, .odt o imágenes (.png, .jpg, .webp)."
-    )
+        sections = read_txt(path)
+    elif suffix == ".epub":
+        sections = read_epub(path)
+    elif suffix == ".pdf":
+        sections = read_pdf(path)
+    elif suffix in (".doc", ".docx", ".docm", ".odt", ".odf", ".rtf", ".wps"):
+        sections = read_office(path)
+    elif suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"):
+        sections = read_image_file(path)
+    else:
+        sys.exit(
+            f"Formato no soportado: {suffix}. "
+            "Usa .pdf, .epub, .txt, .docx, .odt o imágenes (.png, .jpg, .webp)."
+        )
+
+    if sections:
+        save_cached_sections(path, sections)
+    return sections
 
 
 def parse_args() -> argparse.Namespace:
@@ -952,6 +1096,19 @@ def parse_args() -> argparse.Namespace:
         help="Solo narrar las primeras N secciones (0 = todas)",
     )
     parser.add_argument(
+        "--force-ocr",
+        "--force-reload",
+        dest="force_reload",
+        action="store_true",
+        help="Ignorar caché existente y forzar un nuevo análisis completo con OCR",
+    )
+    parser.add_argument(
+        "--export-txt",
+        type=Path,
+        metavar="RUTA_TXT",
+        help="Exportar el texto extraído (con OCR) a un archivo de texto plano .txt y salir",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Solo listar secciones y fragmentos, sin hablar",
@@ -989,9 +1146,21 @@ def main() -> int:
     engine = pick_engine(tts, args.engine)
     voice = pick_voice(tts, engine, args.voice, args.lang)
 
-    sections = load_sections(path)
+    was_cached = is_cached(path) and not args.force_reload
+    sections = load_sections(path, force_reload=args.force_reload)
     if not sections:
         sys.exit("No se extrajo texto del archivo.")
+
+    if was_cached:
+        print(f"⚡ Cargado al instante desde caché de texto (~0.01s, sin espera de OCR).")
+        print(f"   (Usa --force-ocr si deseas forzar un nuevo análisis completo).")
+    else:
+        print(f"💾 Texto y OCR extraídos y almacenados en caché para próximas aperturas.")
+
+    if args.export_txt:
+        export_sections_to_txt(sections, args.export_txt, doc_name=path.name, source_path=str(path))
+        print(f"✅ Texto exportado correctamente a: {args.export_txt}")
+        return 0
 
     start = max(1, args.from_chapter) - 1
     if args.from_chapter == 1:
