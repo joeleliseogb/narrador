@@ -47,6 +47,87 @@ libro_mod = importlib.util.module_from_spec(spec_libro)
 spec_libro.loader.exec_module(libro_mod)
 
 
+class ToolTip:
+    """Muestra un mensaje flotante elegante al posar el cursor sobre un widget."""
+
+    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 250):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.tip_window = None
+        self._after_id = None
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def update_text(self, new_text: str):
+        self.text = new_text
+        if self.tip_window:
+            self._hide()
+            self._show()
+
+    def _on_enter(self, event=None):
+        self._schedule()
+
+    def _on_leave(self, event=None):
+        self._cancel()
+        self._hide()
+
+    def _schedule(self):
+        self._cancel()
+        if self.text:
+            self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _cancel(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if not self.text or self.tip_window:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 4
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except Exception:
+            return
+
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        try:
+            tw.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        frame = tk.Frame(tw, bg="#0f172a", bd=1, relief=tk.SOLID, highlightbackground="#38bdf8", highlightthickness=1)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        lbl = tk.Label(
+            frame,
+            text=self.text,
+            bg="#0f172a",
+            fg="#f8fafc",
+            font=("Sans", 9),
+            padx=8,
+            pady=4,
+            justify=tk.LEFT,
+        )
+        lbl.pack()
+
+    def _hide(self):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
 class BookNarratorGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -132,6 +213,21 @@ class BookNarratorGUI:
         style.configure("Amber.TButton", background=self.amber_color, foreground="#ffffff", font=("Sans", 10, "bold"), padding=6)
         style.map("Amber.TButton", background=[("active", self.amber_hover)])
 
+        # Estilos de botones de iconos compactos (con tooltip al posar el mouse)
+        style.configure("Icon.TButton", font=("Sans", 11), padding=4, width=3)
+
+        style.configure("IconAccent.TButton", background=self.accent_color, foreground="#ffffff", font=("Sans", 11, "bold"), padding=4, width=3)
+        style.map("IconAccent.TButton", background=[("active", self.accent_hover)])
+
+        style.configure("IconGreen.TButton", background=self.green_color, foreground="#ffffff", font=("Sans", 11, "bold"), padding=4, width=3)
+        style.map("IconGreen.TButton", background=[("active", self.green_hover)])
+
+        style.configure("IconAmber.TButton", background=self.amber_color, foreground="#ffffff", font=("Sans", 11, "bold"), padding=4, width=3)
+        style.map("IconAmber.TButton", background=[("active", self.amber_hover)])
+
+        style.configure("IconActive.TButton", background="#2563eb", foreground="#ffffff", font=("Sans", 11, "bold"), padding=4, width=3)
+        style.map("IconActive.TButton", background=[("active", "#1d4ed8")])
+
         style.configure("Treeview", 
                         background="#1e293b", 
                         foreground="#f8fafc", 
@@ -150,36 +246,42 @@ class BookNarratorGUI:
                 pass
 
     def _build_ui(self):
-        # 1. Barra superior de acciones
-        top_bar = ttk.Frame(self.root, style="Card.TFrame", padding=12)
+        # 1. Barra superior de acciones (iconos compactos con tooltip)
+        top_bar = ttk.Frame(self.root, style="Card.TFrame", padding=(12, 8))
         top_bar.pack(fill=tk.X, padx=12, pady=(12, 6))
 
-        title_lbl = ttk.Label(top_bar, text="📖 Narrador de Libros", style="Header.TLabel")
-        title_lbl.pack(side=tk.LEFT, padx=(0, 16))
+        title_lbl = ttk.Label(top_bar, text="📖 Narrador", style="Header.TLabel")
+        title_lbl.pack(side=tk.LEFT, padx=(0, 14))
 
-        btn_open = ttk.Button(top_bar, text="📂 Abrir Libro / PDF", command=self.open_file_dialog, style="Accent.TButton")
-        btn_open.pack(side=tk.LEFT, padx=4)
+        btn_open = ttk.Button(top_bar, text="📂", command=self.open_file_dialog, style="IconAccent.TButton")
+        btn_open.pack(side=tk.LEFT, padx=3)
+        self.tip_open = ToolTip(btn_open, "Abrir libro, PDF, Word o imagen con OCR (📂)")
 
-        self.btn_resume = ttk.Button(top_bar, text="📍 Reanudar", command=self.resume_last_book, style="Amber.TButton")
-        self.btn_resume.pack(side=tk.LEFT, padx=4)
+        self.btn_resume = ttk.Button(top_bar, text="📍", command=self.resume_last_book, style="IconAmber.TButton")
+        self.btn_resume.pack(side=tk.LEFT, padx=3)
+        self.tip_resume = ToolTip(self.btn_resume, "Reanudar última lectura (📍)")
 
-        self.btn_export_txt = ttk.Button(top_bar, text="📄 Exportar TXT", command=self.export_txt_dialog, state=tk.DISABLED)
-        self.btn_export_txt.pack(side=tk.LEFT, padx=4)
-
-        self.btn_force_ocr = ttk.Button(top_bar, text="🔄 Re-analizar OCR", command=self.reload_force_ocr, state=tk.DISABLED)
-        self.btn_force_ocr.pack(side=tk.LEFT, padx=4)
-
-        self.btn_translate = ttk.Checkbutton(
+        self.btn_translate = ttk.Button(
             top_bar,
-            text="🌐 Traducir al Español",
-            variable=self.translate_to_spanish_var,
+            text="🌐",
             command=self._on_toggle_translate,
+            style="Icon.TButton",
             state=tk.DISABLED,
         )
-        self.btn_translate.pack(side=tk.LEFT, padx=4)
+        self.btn_translate.pack(side=tk.LEFT, padx=3)
+        self.tip_translate = ToolTip(self.btn_translate, "Traducir al Español (🌐 Alternar original / traducido)")
 
-        btn_export = ttk.Button(top_bar, text="💾 Guardar como MP3 (Opcional)", command=self.open_export_dialog, style="Green.TButton")
-        btn_export.pack(side=tk.LEFT, padx=6)
+        self.btn_export_txt = ttk.Button(top_bar, text="📄", command=self.export_txt_dialog, style="Icon.TButton", state=tk.DISABLED)
+        self.btn_export_txt.pack(side=tk.LEFT, padx=3)
+        self.tip_export_txt = ToolTip(self.btn_export_txt, "Exportar texto extraído a archivo plano .txt (📄)")
+
+        self.btn_force_ocr = ttk.Button(top_bar, text="🔄", command=self.reload_force_ocr, style="Icon.TButton", state=tk.DISABLED)
+        self.btn_force_ocr.pack(side=tk.LEFT, padx=3)
+        self.tip_force_ocr = ToolTip(self.btn_force_ocr, "Re-analizar documento y forzar nuevo escaneo OCR (🔄)")
+
+        btn_export = ttk.Button(top_bar, text="💾", command=self.open_export_dialog, style="IconGreen.TButton")
+        btn_export.pack(side=tk.LEFT, padx=3)
+        self.tip_export_mp3 = ToolTip(btn_export, "Guardar como audiolibro permanente en MP3 (💾)")
 
         self.file_info_lbl = ttk.Label(top_bar, text="Ningún archivo cargado", style="Muted.TLabel")
         self.file_info_lbl.pack(side=tk.RIGHT, padx=8)
@@ -273,35 +375,42 @@ class BookNarratorGUI:
         self.rate_scale = ttk.Scale(voice_row, from_=0.6, to=1.5, value=1.0, command=self._on_rate_change)
         self.rate_scale.pack(side=tk.LEFT, padx=(0, 4), fill=tk.X, expand=True)
         self.rate_val_lbl = ttk.Label(voice_row, text="1.0x", style="Card.TLabel", width=4)
-        self.rate_val_lbl.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(self.engine_combo, "Seleccionar motor de voz (RHVoice local o Edge online)")
+        ToolTip(self.voice_combo, "Seleccionar voz para la narración")
+        ToolTip(self.rate_scale, "Ajustar velocidad de narración (0.6x a 1.5x)")
 
         self.chk_multilingual = ttk.Checkbutton(
             voice_row,
-            text="🌐 Multilingüe (Inglés/Español auto)",
+            text="🌐 Multilingüe auto",
             variable=self.multilingual_var,
         )
         self.chk_multilingual.pack(side=tk.RIGHT, padx=4)
+        ToolTip(self.chk_multilingual, "Detectar citas y frases en inglés u otros idiomas automáticamente")
 
-        # Fila 2: Controles de reproducción
+        # Fila 2: Controles de reproducción con iconos y tooltips
         controls_row = ttk.Frame(bottom_card, style="Card.TFrame")
         controls_row.pack(fill=tk.X)
 
-        self.btn_prev = ttk.Button(controls_row, text="⏮ Anterior (←)", command=self.prev_section, width=13)
+        self.btn_prev = ttk.Button(controls_row, text="⏮", command=self.prev_section, style="Icon.TButton")
         self.btn_prev.pack(side=tk.LEFT, padx=3)
+        self.tip_prev = ToolTip(self.btn_prev, "Página anterior (← Flecha izquierda)")
 
-        self.btn_play = ttk.Button(controls_row, text="▶ Leer en voz alta (Espacio)", command=self.toggle_play, style="Accent.TButton", width=25)
+        self.btn_play = ttk.Button(controls_row, text="▶", command=self.toggle_play, style="IconAccent.TButton")
         self.btn_play.pack(side=tk.LEFT, padx=3)
+        self.tip_play = ToolTip(self.btn_play, "Leer en voz alta / Pausar (Barra espaciadora)")
 
-        self.btn_stop = ttk.Button(controls_row, text="⏹ Detener (Esc)", command=self.stop_speech, width=13)
+        self.btn_stop = ttk.Button(controls_row, text="⏹", command=self.stop_speech, style="Icon.TButton")
         self.btn_stop.pack(side=tk.LEFT, padx=3)
+        self.tip_stop = ToolTip(self.btn_stop, "Detener narración (Escape)")
 
-        self.btn_next = ttk.Button(controls_row, text="⏭ Siguiente (→)", command=self.next_section, width=13)
+        self.btn_next = ttk.Button(controls_row, text="⏭", command=self.next_section, style="Icon.TButton")
         self.btn_next.pack(side=tk.LEFT, padx=3)
+        self.tip_next = ToolTip(self.btn_next, "Página siguiente (→ Flecha derecha)")
 
         self.page_indicator_lbl = ttk.Label(controls_row, text="", style="Card.TLabel", font=("Sans", 10, "bold"))
         self.page_indicator_lbl.pack(side=tk.LEFT, padx=(10, 6))
 
-        self.status_lbl = ttk.Label(controls_row, text="Lectura en vivo. Barra espaciadora: pausar/reanudar. Flechas: cambiar página.", style="Muted.TLabel")
+        self.status_lbl = ttk.Label(controls_row, text="Barra espaciadora: pausar/reanudar. Flechas: cambiar página.", style="Muted.TLabel")
         self.status_lbl.pack(side=tk.RIGHT, padx=8)
 
     def _on_rate_change(self, val):
@@ -409,6 +518,15 @@ class BookNarratorGUI:
                         self.translate_to_spanish_var.set(False)
                         self.sections = self.original_sections
 
+                    if self.translate_to_spanish_var.get():
+                        self.btn_translate.configure(style="IconActive.TButton")
+                        if hasattr(self, "tip_translate"):
+                            self.tip_translate.update_text("🌐 Mostrando versión en Español (Clic para ver original)")
+                    else:
+                        self.btn_translate.configure(style="Icon.TButton")
+                        if hasattr(self, "tip_translate"):
+                            self.tip_translate.update_text("🌐 Traducir al Español (Clic para traducir/activar)")
+
                     self._update_file_info_header()
 
                     # Determinar si reanudamos en el punto guardado
@@ -501,10 +619,16 @@ class BookNarratorGUI:
         if not self.original_sections:
             return
 
+        new_val = not self.translate_to_spanish_var.get()
+        self.translate_to_spanish_var.set(new_val)
+
         was_speaking = self.is_speaking
         saved_sec = max(0, self.current_section_idx)
 
-        if self.translate_to_spanish_var.get():
+        if new_val:
+            self.btn_translate.configure(style="IconActive.TButton")
+            if hasattr(self, "tip_translate"):
+                self.tip_translate.update_text("🌐 Mostrando versión en Español (Clic para ver original)")
             if self.translated_sections:
                 self.stop_speech()
                 self.sections = self.translated_sections
@@ -516,6 +640,9 @@ class BookNarratorGUI:
             else:
                 self.translate_book(force=False, auto_start_speech=was_speaking)
         else:
+            self.btn_translate.configure(style="Icon.TButton")
+            if hasattr(self, "tip_translate"):
+                self.tip_translate.update_text("🌐 Traducir al Español (Clic para traducir y ver en español)")
             self.stop_speech()
             self.sections = self.original_sections
             self._refresh_tree_and_view(target_section=saved_sec, target_chunk=0)
@@ -573,11 +700,17 @@ class BookNarratorGUI:
                 def on_finish():
                     if cancel_flag[0]:
                         self.translate_to_spanish_var.set(False)
+                        self.btn_translate.configure(style="Icon.TButton")
+                        if hasattr(self, "tip_translate"):
+                            self.tip_translate.update_text("🌐 Traducir al Español (Clic para traducir y ver en español)")
                         return
                     dialog.destroy()
                     if tr_sections:
                         self.translated_sections = tr_sections
                         self.translate_to_spanish_var.set(True)
+                        self.btn_translate.configure(style="IconActive.TButton")
+                        if hasattr(self, "tip_translate"):
+                            self.tip_translate.update_text("🌐 Mostrando versión en Español (Clic para ver original)")
                         self.sections = tr_sections
                         saved_sec = max(0, min(self.current_section_idx, len(tr_sections) - 1))
                         self._refresh_tree_and_view(target_section=saved_sec, target_chunk=0)
@@ -588,13 +721,17 @@ class BookNarratorGUI:
                     else:
                         messagebox.showerror("Error", "No se pudo completar la traducción.")
                         self.translate_to_spanish_var.set(False)
+                        self.btn_translate.configure(style="Icon.TButton")
+                        if hasattr(self, "tip_translate"):
+                            self.tip_translate.update_text("🌐 Traducir al Español (Clic para traducir y ver en español)")
 
                 self.root.after(0, on_finish)
             except Exception as e:
                 self.root.after(0, lambda err=e: (
                     dialog.destroy(),
                     messagebox.showerror("Error", f"Error durante la traducción:\n{err}"),
-                    self.translate_to_spanish_var.set(False)
+                    self.translate_to_spanish_var.set(False),
+                    self.btn_translate.configure(style="Icon.TButton")
                 ))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -802,7 +939,9 @@ class BookNarratorGUI:
         self.current_section_idx = target_sec
         self.current_chunk_idx = target_chunk
         self.is_speaking = True
-        self.btn_play.configure(text="⏸ Pausar (Espacio)")
+        self.btn_play.configure(text="⏸")
+        if hasattr(self, "tip_play"):
+            self.tip_play.update_text("Pausar lectura (Barra espaciadora)")
         self.status_lbl.configure(text=f"Leyendo pág. {target_sec + 1}…")
 
         voice, engine = self.get_selected_voice_and_engine()
@@ -821,7 +960,9 @@ class BookNarratorGUI:
             return
         self.is_paused = True
         self.pause_event.clear()
-        self.btn_play.configure(text="▶ Reanudar (Espacio)")
+        self.btn_play.configure(text="▶")
+        if hasattr(self, "tip_play"):
+            self.tip_play.update_text("Reanudar lectura (Barra espaciadora)")
         self.status_lbl.configure(text=f"⏸ Lectura pausada en pág. {self.current_section_idx + 1}, frase {self.current_chunk_idx + 1}.")
         try:
             host.cancel_speech()
@@ -833,7 +974,9 @@ class BookNarratorGUI:
         if not self.is_speaking or not self.is_paused:
             return
         self.is_paused = False
-        self.btn_play.configure(text="⏸ Pausar (Espacio)")
+        self.btn_play.configure(text="⏸")
+        if hasattr(self, "tip_play"):
+            self.tip_play.update_text("Pausar lectura (Barra espaciadora)")
         self.status_lbl.configure(text=f"▶ Reanudando en pág. {self.current_section_idx + 1}, frase {self.current_chunk_idx + 1}…")
         self.pause_event.set()
 
@@ -842,7 +985,9 @@ class BookNarratorGUI:
         self.is_speaking = False
         self.is_paused = False
         self.pause_event.set()
-        self.btn_play.configure(text="▶ Leer en voz alta (Espacio)")
+        self.btn_play.configure(text="▶")
+        if hasattr(self, "tip_play"):
+            self.tip_play.update_text("Leer en voz alta (Barra espaciadora)")
         self.status_lbl.configure(text="Lectura detenida.")
         try:
             host.cancel_speech()
@@ -1005,10 +1150,13 @@ class BookNarratorGUI:
         if bm and Path(bm.get("path", "")).is_file():
             name = bm.get("name", "Libro")
             idx = bm.get("section_idx", 0) + 1
-            short_name = name if len(name) <= 18 else name[:16] + "…"
-            self.btn_resume.configure(text=f"📍 Reanudar: {short_name} (pág. {idx})", state=tk.NORMAL)
+            self.btn_resume.configure(state=tk.NORMAL)
+            if hasattr(self, "tip_resume"):
+                self.tip_resume.update_text(f"Reanudar última lectura: {name} (pág. {idx})")
         else:
-            self.btn_resume.configure(text="📍 Reanudar (ninguno)", state=tk.DISABLED)
+            self.btn_resume.configure(state=tk.DISABLED)
+            if hasattr(self, "tip_resume"):
+                self.tip_resume.update_text("Reanudar (sin lecturas previas)")
 
     def check_last_file_auto_resume(self):
         bm = libro_mod.get_last_bookmark()
