@@ -58,10 +58,14 @@ class BookNarratorGUI:
         self.current_file: Path | None = None
         self.sections: list[tuple[str, str]] = []  # [(title, body)]
         self.current_section_idx = -1
-        self.current_chunk_idx = -1
+        self.current_chunk_idx = 0
         self.is_speaking = False
         self.is_paused = False
-        self.stop_requested = False
+        self.pause_event = threading.Event()
+        self.pause_event.set()
+        self.speech_session_id = 0
+        self._programmatic_tree_select = False
+        self.multilingual_var = tk.BooleanVar(value=True)
         self.speak_thread: threading.Thread | None = None
         self.export_thread: threading.Thread | None = None
 
@@ -245,7 +249,14 @@ class BookNarratorGUI:
         self.rate_scale = ttk.Scale(voice_row, from_=0.6, to=1.5, value=1.0, command=self._on_rate_change)
         self.rate_scale.pack(side=tk.LEFT, padx=(0, 4), fill=tk.X, expand=True)
         self.rate_val_lbl = ttk.Label(voice_row, text="1.0x", style="Card.TLabel", width=4)
-        self.rate_val_lbl.pack(side=tk.LEFT)
+        self.rate_val_lbl.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.chk_multilingual = ttk.Checkbutton(
+            voice_row,
+            text="🌐 Multilingüe (Inglés/Español auto)",
+            variable=self.multilingual_var,
+        )
+        self.chk_multilingual.pack(side=tk.RIGHT, padx=4)
 
         # Fila 2: Controles de reproducción
         controls_row = ttk.Frame(bottom_card, style="Card.TFrame")
@@ -277,17 +288,22 @@ class BookNarratorGUI:
         engine_str = self.engine_var.get()
         if "local" in engine_str:
             voices = [
-                "local:mateo (RHVoice masculino - recomendado)",
-                "local:carlos (RHVoice)",
-                "local:leticia (RHVoice)",
+                "local:mateo (Español - Masculino recomendado)",
+                "local:carlos (Español - Masculino)",
+                "local:leticia (Español - Femenina)",
+                "local:slt (Inglés nativo - Femenina)",
+                "local:bdl (Inglés nativo - Masculino)",
+                "local:clb (Inglés nativo - Femenina)",
             ]
         else:
             voices = [
-                "edge:es-ES-ElviraNeural (Femenina España)",
-                "edge:es-ES-AlvaroNeural (Masculina España)",
-                "edge:es-MX-DaliaNeural (Femenina México)",
-                "edge:es-MX-JorgeNeural (Masculina México)",
-                "edge:es-US-PalomaNeural (Femenina EEUU)",
+                "edge:es-ES-AlvaroNeural (Español España - Masculina)",
+                "edge:es-ES-ElviraNeural (Español España - Femenina)",
+                "edge:es-MX-JorgeNeural (Español México - Masculina)",
+                "edge:es-MX-DaliaNeural (Español México - Femenina)",
+                "edge:en-US-AndrewMultilingualNeural (Multilingüe Neural)",
+                "edge:en-US-AriaNeural (Inglés - Femenina)",
+                "edge:en-US-GuyNeural (Inglés - Masculina)",
             ]
         self.voice_combo.configure(values=voices)
         if voices:
@@ -352,14 +368,18 @@ class BookNarratorGUI:
 
                     # Determinar si reanudamos en el punto guardado
                     start_target = 0
+                    start_chunk = 0
                     is_resumed = False
                     if saved_bm:
                         s_idx = saved_bm.get("section_idx", 0)
+                        c_idx = saved_bm.get("chunk_idx", 0)
                         if 0 <= s_idx < len(self.sections):
                             start_target = s_idx
-                            is_resumed = (start_target > 0)
+                            start_chunk = max(0, c_idx)
+                            is_resumed = (start_target > 0 or start_chunk > 0)
 
                     self.current_section_idx = start_target
+                    self.current_chunk_idx = start_chunk
                     self._select_tree_row(start_target)
 
                     if is_resumed:
@@ -369,7 +389,7 @@ class BookNarratorGUI:
 
                     self._update_resume_button()
                     # Iniciar narración inmediatamente después de analizar
-                    self.root.after(120, self.start_speech)
+                    self.root.after(120, lambda: self.start_speech(from_section=start_target, from_chunk=start_chunk))
 
                 self.root.after(0, on_done)
             except Exception as e:
@@ -382,6 +402,8 @@ class BookNarratorGUI:
         threading.Thread(target=load_worker, daemon=True).start()
 
     def _on_tree_select(self, event=None):
+        if self._programmatic_tree_select:
+            return
         selected = self.tree.selection()
         if not selected:
             return
@@ -389,11 +411,10 @@ class BookNarratorGUI:
         if idx == self.current_section_idx:
             return
         was_speaking = self.is_speaking
-        if was_speaking:
-            self.stop_speech()
+        self.stop_speech()
         self._display_section(idx)
         if was_speaking:
-            self.start_speech()
+            self.start_speech(from_section=idx, from_chunk=0)
 
     def _display_section(self, idx: int):
         if idx < 0 or idx >= len(self.sections):
@@ -416,114 +437,197 @@ class BookNarratorGUI:
         else:
             self.start_speech()
 
-    def start_speech(self):
+    def start_speech(self, from_section: int | None = None, from_chunk: int | None = None):
         if not self.sections:
             messagebox.showinfo("Aviso", "Primero abre un archivo PDF o libro.")
             return
 
-        self.stop_requested = False
-        self.is_speaking = True
+        target_sec = from_section if from_section is not None else self.current_section_idx
+        if target_sec < 0 or target_sec >= len(self.sections):
+            target_sec = 0
+
+        target_chunk = from_chunk if from_chunk is not None else max(0, self.current_chunk_idx)
+
+        # Cancelar inmediatamente cualquier reproducción previa
+        self.speech_session_id += 1
         self.is_paused = False
+        self.pause_event.set()
+        try:
+            host.cancel_speech()
+        except Exception:
+            pass
+
+        self.current_section_idx = target_sec
+        self.current_chunk_idx = target_chunk
+        self.is_speaking = True
         self.btn_play.configure(text="⏸ Pausar (Espacio)")
-        self.status_lbl.configure(text="Leyendo en vivo…")
+        self.status_lbl.configure(text=f"Leyendo pág. {target_sec + 1}…")
 
         voice, engine = self.get_selected_voice_and_engine()
         rate = float(self.rate_scale.get())
 
+        current_session = self.speech_session_id
         self.speak_thread = threading.Thread(
             target=self._speech_worker,
-            args=(self.current_section_idx, voice, engine, rate),
-            daemon=True
+            args=(current_session, target_sec, target_chunk, voice, engine, rate),
+            daemon=True,
         )
         self.speak_thread.start()
 
     def pause_speech(self):
+        if not self.is_speaking or self.is_paused:
+            return
         self.is_paused = True
+        self.pause_event.clear()
         self.btn_play.configure(text="▶ Reanudar (Espacio)")
-        self.status_lbl.configure(text="Lectura pausada.")
-        self.save_progress()
-
-    def resume_speech(self):
-        self.is_paused = False
-        self.btn_play.configure(text="⏸ Pausar (Espacio)")
-        self.status_lbl.configure(text="Leyendo en vivo…")
-
-    def stop_speech(self):
-        self.stop_requested = True
-        self.is_speaking = False
-        self.is_paused = False
-        self.btn_play.configure(text="▶ Leer en voz alta (Espacio)")
-        self.status_lbl.configure(text="Lectura detenida.")
-        self.save_progress()
+        self.status_lbl.configure(text=f"⏸ Lectura pausada en pág. {self.current_section_idx + 1}, frase {self.current_chunk_idx + 1}.")
         try:
-            host.stop_playback()
+            host.cancel_speech()
         except Exception:
             pass
+        self.save_progress(self.current_section_idx, self.current_chunk_idx)
+
+    def resume_speech(self):
+        if not self.is_speaking or not self.is_paused:
+            return
+        self.is_paused = False
+        self.btn_play.configure(text="⏸ Pausar (Espacio)")
+        self.status_lbl.configure(text=f"▶ Reanudando en pág. {self.current_section_idx + 1}, frase {self.current_chunk_idx + 1}…")
+        self.pause_event.set()
+
+    def stop_speech(self):
+        self.speech_session_id += 1
+        self.is_speaking = False
+        self.is_paused = False
+        self.pause_event.set()
+        self.btn_play.configure(text="▶ Leer en voz alta (Espacio)")
+        self.status_lbl.configure(text="Lectura detenida.")
+        try:
+            host.cancel_speech()
+        except Exception:
+            pass
+        try:
+            self.text_view.tag_remove("highlight", "1.0", tk.END)
+        except Exception:
+            pass
+        self.save_progress(self.current_section_idx, self.current_chunk_idx)
 
     def prev_section(self):
         if self.current_section_idx > 0:
             target = self.current_section_idx - 1
             was_speaking = self.is_speaking
+            self.stop_speech()
+            self._select_tree_row_programmatic(target)
             if was_speaking:
-                self.stop_speech()
-            self._select_tree_row(target)
-            if was_speaking:
-                self.start_speech()
+                self.start_speech(from_section=target, from_chunk=0)
 
     def next_section(self):
         if self.current_section_idx < len(self.sections) - 1:
             target = self.current_section_idx + 1
             was_speaking = self.is_speaking
+            self.stop_speech()
+            self._select_tree_row_programmatic(target)
             if was_speaking:
-                self.stop_speech()
-            self._select_tree_row(target)
-            if was_speaking:
-                self.start_speech()
+                self.start_speech(from_section=target, from_chunk=0)
 
-    def _speech_worker(self, start_idx: int, voice: str, engine: str, rate: float):
+    def _speech_worker(self, session_id: int, start_idx: int, start_chunk_idx: int, voice: str, engine: str, rate: float):
         for s_idx in range(start_idx, len(self.sections)):
-            if self.stop_requested:
-                break
+            if session_id != self.speech_session_id:
+                return
 
             self.current_section_idx = s_idx
-            self.root.after(0, lambda idx=s_idx: self._select_tree_row(idx))
-            self.save_progress(s_idx)
+            self.root.after(0, lambda idx=s_idx: self._select_tree_row_programmatic(idx))
+            self.save_progress(s_idx, 0)
             title, body = self.sections[s_idx]
-            paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+            chunks = libro_mod.get_section_chunks(body)
+            if not chunks:
+                continue
 
-            for para in paragraphs:
-                if self.stop_requested:
-                    break
+            chunk_start = start_chunk_idx if s_idx == start_idx else 0
+            for c_idx in range(chunk_start, len(chunks)):
+                if session_id != self.speech_session_id:
+                    return
 
-                for chunk in libro_mod.chunk_paragraph(para):
-                    if self.stop_requested:
-                        break
+                self.current_chunk_idx = c_idx
+                chunk = chunks[c_idx]
 
-                    while self.is_paused and not self.stop_requested:
-                        time.sleep(0.1)
+                while self.is_paused:
+                    if session_id != self.speech_session_id:
+                        return
+                    self.pause_event.wait(timeout=0.1)
 
-                    if self.stop_requested:
-                        break
+                if session_id != self.speech_session_id:
+                    return
 
-                    self.root.after(0, lambda c=chunk: self._highlight_text(c))
-                    
+                self.root.after(0, lambda c=chunk: self._highlight_text(c))
+
+                if self.multilingual_var.get():
+                    detected_lang = libro_mod.detect_language(chunk)
+                else:
+                    detected_lang = "es"
+
+                speak_voice, speak_lang, speak_engine = libro_mod.resolve_voice_for_chunk(
+                    detected_lang, voice, engine
+                )
+
+                lang_tag = f"[{detected_lang.upper()}] " if detected_lang != "es" else ""
+                self.root.after(
+                    0,
+                    lambda lbl=f"Leyendo pág. {s_idx + 1}/{len(self.sections)} {lang_tag}(frase {c_idx + 1}/{len(chunks)})…": self.status_lbl.configure(text=lbl)
+                )
+
+                res = host.speak(
+                    text=chunk,
+                    lang=speak_lang,
+                    rate=rate,
+                    pitch=1.0,
+                    volume=1.0,
+                    voice=speak_voice,
+                    engine=speak_engine,
+                )
+
+                if self.is_paused and session_id == self.speech_session_id:
+                    while self.is_paused:
+                        if session_id != self.speech_session_id:
+                            return
+                        self.pause_event.wait(timeout=0.1)
+
+                    if session_id != self.speech_session_id:
+                        return
+
                     res = host.speak(
                         text=chunk,
-                        lang="es-ES",
+                        lang=speak_lang,
                         rate=rate,
                         pitch=1.0,
                         volume=1.0,
-                        voice=voice,
-                        engine=engine,
+                        voice=speak_voice,
+                        engine=speak_engine,
                     )
-                    time.sleep(0.15)
 
-        self.root.after(0, self.stop_speech)
+                if session_id != self.speech_session_id:
+                    return
+
+                if c_idx % 3 == 0:
+                    self.save_progress(s_idx, c_idx)
+
+                time.sleep(0.08)
+
+        if session_id == self.speech_session_id:
+            self.root.after(0, self.stop_speech)
 
     def _select_tree_row(self, idx: int):
-        self.tree.selection_set(str(idx))
-        self.tree.see(str(idx))
-        self._display_section(idx)
+        self._select_tree_row_programmatic(idx)
+
+    def _select_tree_row_programmatic(self, idx: int):
+        self._programmatic_tree_select = True
+        try:
+            if self.tree.exists(str(idx)):
+                self.tree.selection_set(str(idx))
+                self.tree.see(str(idx))
+            self._display_section(idx)
+        finally:
+            self._programmatic_tree_select = False
 
     def _highlight_text(self, chunk: str):
         self.text_view.tag_remove("highlight", "1.0", tk.END)
@@ -536,15 +640,16 @@ class BookNarratorGUI:
             self.text_view.tag_add("highlight", idx, end_idx)
             self.text_view.see(idx)
 
-    def save_progress(self, section_idx: int | None = None):
+    def save_progress(self, section_idx: int | None = None, chunk_idx: int | None = None):
         if not self.current_file or not self.sections:
             return
         idx = section_idx if section_idx is not None else self.current_section_idx
+        c_idx = chunk_idx if chunk_idx is not None else max(0, self.current_chunk_idx)
         if 0 <= idx < len(self.sections):
             title = self.sections[idx][0]
             voice, engine = self.get_selected_voice_and_engine()
             rate = float(self.rate_scale.get())
-            libro_mod.save_bookmark(self.current_file, idx, title, rate, voice, engine)
+            libro_mod.save_bookmark(self.current_file, idx, c_idx, title, rate, voice, engine)
 
     def resume_last_book(self):
         bm = libro_mod.get_last_bookmark()
@@ -697,43 +802,49 @@ class BookNarratorGUI:
                         part_wav = cache / f"{token}.wav"
                         part_mp3 = cache / f"{token}.mp3"
 
-                        # Guardar texto
-                        clean_text = f"{title}.\n\n{body}"
-                        
-                        if engine == "edge":
-                            # Edge TTS
-                            edge_bin = host.edge_tts_bin()
-                            if edge_bin:
-                                voice_id = host.edge_voice_id(voice)
-                                cmd = [
-                                    edge_bin,
-                                    "--voice", voice_id,
-                                    f"--rate={host.map_edge_rate(rate)}",
-                                    "--text", clean_text,
-                                    "--write-media", str(part_mp3),
-                                ]
-                                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-                                if proc.returncode == 0 and part_mp3.is_file():
-                                    temp_parts.append(part_mp3)
-                                    continue
-                        
-                        # RHVoice fallback / default
-                        in_txt = cache / f"{token}.txt"
-                        in_txt.write_text(clean_text, encoding="utf-8")
-                        cmd_rh = [rh_bin, "-p", host.local_voice_id(voice) or "mateo", "-o", str(part_wav), "-i", str(in_txt)]
-                        proc_rh = subprocess.run(cmd_rh, capture_output=True, text=True, timeout=180)
-                        
-                        if part_wav.is_file() and part_wav.stat().st_size > 128:
-                            # Convertir a MP3 con ffmpeg
-                            subprocess.run([
-                                "ffmpeg", "-y", "-i", str(part_wav),
-                                "-c:a", "libmp3lame", "-b:a", "128k",
-                                str(part_mp3)
-                            ], capture_output=True, text=True)
-                            if part_mp3.is_file():
-                                temp_parts.append(part_mp3)
+                        # Sintetizar fragmentos de esta sección con soporte multilingüe
+                        chunks = libro_mod.get_section_chunks(clean_text)
+                        for c_idx, piece in enumerate(chunks):
+                            if cancel_flag[0]:
+                                break
+                            c_token = f"{token}-{c_idx}"
+                            c_wav = cache / f"{c_token}.wav"
+                            c_mp3 = cache / f"{c_token}.mp3"
+
+                            c_lang = libro_mod.detect_language(piece) if self.multilingual_var.get() else "es"
+                            spk_v, spk_l, spk_e = libro_mod.resolve_voice_for_chunk(c_lang, voice, engine)
+
+                            if spk_e == "edge":
+                                edge_bin = host.edge_tts_bin()
+                                if edge_bin:
+                                    cmd = [
+                                        edge_bin,
+                                        "--voice", host.edge_voice_id(spk_v),
+                                        f"--rate={host.map_edge_rate(rate)}",
+                                        "--text", piece,
+                                        "--write-media", str(c_mp3),
+                                    ]
+                                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                                    if proc.returncode == 0 and c_mp3.is_file() and c_mp3.stat().st_size > 128:
+                                        temp_parts.append(c_mp3)
+                                        continue
+
+                            # RHVoice local
+                            in_txt = cache / f"{c_token}.txt"
+                            in_txt.write_text(piece, encoding="utf-8")
+                            cmd_rh = [rh_bin, "-p", host.local_voice_id(spk_v) or "mateo", "-o", str(c_wav), "-i", str(in_txt)]
+                            proc_rh = subprocess.run(cmd_rh, capture_output=True, text=True, timeout=120)
+
+                            if c_wav.is_file() and c_wav.stat().st_size > 128:
+                                subprocess.run([
+                                    "ffmpeg", "-y", "-i", str(c_wav),
+                                    "-c:a", "libmp3lame", "-b:a", "128k",
+                                    str(c_mp3)
+                                ], capture_output=True, text=True)
+                                if c_mp3.is_file():
+                                    temp_parts.append(c_mp3)
                             try:
-                                part_wav.unlink(missing_ok=True)
+                                c_wav.unlink(missing_ok=True)
                                 in_txt.unlink(missing_ok=True)
                             except Exception:
                                 pass

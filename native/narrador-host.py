@@ -22,6 +22,8 @@ EDGE_VOICE_PREFIX = "edge:"
 LOCAL_VOICE_PREFIX = "local:"
 _play_proc = None
 _play_tmp = None
+_gen_proc = None
+_is_cancelled = False
 
 # Voces RHVoice conocidas por idioma (IDs en minúsculas)
 SPANISH_RHVOICE_IDS = frozenset(
@@ -144,11 +146,14 @@ def map_edge_pitch(pitch):
 def stop_playback():
     global _play_proc, _play_tmp
     if _play_proc is not None and _play_proc.poll() is None:
-        _play_proc.terminate()
         try:
-            _play_proc.wait(timeout=0.4)
-        except subprocess.TimeoutExpired:
-            _play_proc.kill()
+            _play_proc.terminate()
+            _play_proc.wait(timeout=0.15)
+        except Exception:
+            try:
+                _play_proc.kill()
+            except Exception:
+                pass
     _play_proc = None
     if _play_tmp and os.path.isfile(_play_tmp):
         try:
@@ -159,16 +164,31 @@ def stop_playback():
 
 
 def cancel_speech():
+    global _is_cancelled, _gen_proc
+    _is_cancelled = True
     stop_playback()
+    if _gen_proc is not None and _gen_proc.poll() is None:
+        try:
+            _gen_proc.terminate()
+            _gen_proc.wait(timeout=0.15)
+        except Exception:
+            try:
+                _gen_proc.kill()
+            except Exception:
+                pass
+    _gen_proc = None
     for cmd in (
         ["spd-say", "--cancel"],
-        ["killall", "spd-say"],
-        ["killall", "ffplay"],
-        ["killall", "mpv"],
-        ["killall", "edge-playback"],
+        ["pkill", "-9", "spd-say"],
+        ["pkill", "-9", "ffplay"],
+        ["pkill", "-9", "mpv"],
+        ["pkill", "-9", "edge-playback"],
     ):
         if shutil.which(cmd[0]):
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
 
 def estimate_duration_ms(text, rate=1.0):
@@ -378,19 +398,20 @@ def rhvoice_voice_in_system(voice_id):
 
 
 def should_use_rhvoice_snap_direct(voice_id):
-    """Snap voices (Mateo) are invisible to Fedora's sd_rhvoice — synthesize directly."""
+    """Direct synthesis via rhvoice.test produces a WAV played by ffplay with instant pause/cancellation."""
     voice_id = (voice_id or "").lower()
     if not voice_id or not rhvoice_test_bin():
         return False
-    if not rhvoice_voice_in_snap(voice_id):
-        return False
-    if voice_id in SPANISH_RHVOICE_IDS or voice_lang_guess(voice_id) == "es":
+    if rhvoice_voice_in_snap(voice_id) or rhvoice_voice_in_system(voice_id) or voice_id in installed_rhvoice_ids():
         return True
-    return not rhvoice_voice_in_system(voice_id)
+    return False
 
 
 def speak_rhvoice_snap_direct(text, voice_name, rate=1.0):
-    global _play_tmp
+    global _play_tmp, _gen_proc
+    if _is_cancelled:
+        return {"ok": False, "cancelled": True, "engine": "rhvoice-snap"}
+
     rh_bin = rhvoice_test_bin()
     if not rh_bin:
         return None
@@ -406,20 +427,35 @@ def speak_rhvoice_snap_direct(text, voice_name, rate=1.0):
         cmd.extend(["-r", str(map_rhvoice_rate(rate))])
 
         gen_start = time.time()
-        proc = subprocess.run(
+        _gen_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=120,
         )
+        try:
+            stdout, stderr = _gen_proc.communicate(timeout=120)
+            rc = _gen_proc.returncode
+        except Exception:
+            if _gen_proc:
+                try:
+                    _gen_proc.kill()
+                except Exception:
+                    pass
+            raise
+        finally:
+            _gen_proc = None
+
         generate_ms = int((time.time() - gen_start) * 1000)
 
-        if proc.returncode != 0 or not out_path.is_file() or out_path.stat().st_size < 128:
-            err = (proc.stderr or proc.stdout or "").strip()
+        if _is_cancelled:
+            return {"ok": False, "cancelled": True, "engine": "rhvoice-snap"}
+
+        if rc != 0 or not out_path.is_file() or out_path.stat().st_size < 128:
+            err = (stderr or stdout or "").strip()
             return {
                 "ok": False,
-                "error": err or "rhvoice snap synthesis failed",
+                "error": err or "rhvoice synthesis failed",
                 "engine": "rhvoice-snap",
             }
 
@@ -432,6 +468,10 @@ def speak_rhvoice_snap_direct(text, voice_name, rate=1.0):
         dur_ms = measured_ms or estimate_duration_ms(text, rate)
         play_ms = wait_playback_done(timeout_sec=max(30, dur_ms // 1000 + 20))
         actual_ms = play_ms or dur_ms
+
+        if _is_cancelled:
+            return {"ok": False, "cancelled": True, "engine": "rhvoice-snap"}
+
         return {
             "ok": True,
             "blocking": True,
@@ -443,6 +483,8 @@ def speak_rhvoice_snap_direct(text, voice_name, rate=1.0):
         try:
             if in_path.is_file():
                 in_path.unlink()
+        except OSError:
+            pass
         except OSError:
             pass
 
@@ -725,7 +767,10 @@ def mp3_duration_ms(path):
 
 
 def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
-    global _play_tmp
+    global _play_tmp, _gen_proc
+    if _is_cancelled:
+        return {"ok": False, "cancelled": True, "engine": "edge-tts"}
+
     voice_id = edge_voice_id(voice)
     edge_bin = edge_tts_bin()
     if not voice_id or not edge_bin:
@@ -737,30 +782,54 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
 
     try:
         gen_start = time.time()
-        proc = subprocess.run(
-            [
-                edge_bin,
-                "--voice",
-                voice_id,
-                f"--rate={map_edge_rate(rate)}",
-                f"--volume={map_edge_volume(volume)}",
-                f"--pitch={map_edge_pitch(pitch)}",
-                "--text",
-                text,
-                "--write-media",
-                tmp_path,
-            ],
-            capture_output=True,
+        cmd = [
+            edge_bin,
+            "--voice",
+            voice_id,
+            f"--rate={map_edge_rate(rate)}",
+            f"--volume={map_edge_volume(volume)}",
+            f"--pitch={map_edge_pitch(pitch)}",
+            "--text",
+            text,
+            "--write-media",
+            tmp_path,
+        ]
+        _gen_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=120,
         )
+        try:
+            stdout, stderr = _gen_proc.communicate(timeout=120)
+            rc = _gen_proc.returncode
+        except Exception:
+            if _gen_proc:
+                try:
+                    _gen_proc.kill()
+                except Exception:
+                    pass
+            raise
+        finally:
+            _gen_proc = None
+
         generate_ms = int((time.time() - gen_start) * 1000)
-        if proc.returncode != 0 or not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) < 128:
+
+        if _is_cancelled:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
+            return {"ok": False, "cancelled": True, "engine": "edge-tts"}
+
+        if rc != 0 or not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) < 128:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-            return {"ok": False, "error": proc.stderr.strip() or "edge-tts failed", "engine": "edge-tts"}
+            err = (stderr or stdout or "").strip()
+            return {"ok": False, "error": err or "edge-tts failed", "engine": "edge-tts"}
 
         stop_playback()
         _play_tmp = tmp_path
@@ -776,6 +845,10 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
             _play_tmp = None
         except OSError:
             pass
+
+        if _is_cancelled:
+            return {"ok": False, "cancelled": True, "engine": "edge-tts"}
+
         return {
             "ok": True,
             "blocking": True,
@@ -872,10 +945,12 @@ def speak_rhvoice(text, lang="es", rate=1.0, pitch=1.0, volume=1.0, voice=""):
 
 
 def speak(text, lang="es", rate=1.0, pitch=1.0, volume=1.0, voice="", engine="edge"):
+    global _is_cancelled
     if not text.strip():
         return {"ok": False}
 
     cancel_speech()
+    _is_cancelled = False
     rate = safe_float(rate, 1.0)
     pitch = safe_float(pitch, 1.0)
     volume = safe_float(volume, 1.0)

@@ -48,7 +48,7 @@ def load_bookmarks() -> dict:
         return {}
 
 
-def save_bookmark(path: Path, section_idx: int, title: str = "", rate: float = 1.0, voice: str = "", engine: str = "") -> None:
+def save_bookmark(path: Path, section_idx: int, chunk_idx: int = 0, title: str = "", rate: float = 1.0, voice: str = "", engine: str = "") -> None:
     try:
         import json
         PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +61,7 @@ def save_bookmark(path: Path, section_idx: int, title: str = "", rate: float = 1
             "name": path.name,
             "path": key,
             "section_idx": int(section_idx),
+            "chunk_idx": int(chunk_idx),
             "title": title,
             "rate": float(rate),
             "voice": voice,
@@ -86,6 +87,223 @@ def get_last_bookmark() -> dict | None:
     return None
 
 
+# =========================================================================
+# DETECCIÓN DE IDIOMA Y RESOLUCIÓN MULTILINGÜE DE VOCES
+# =========================================================================
+
+STOPWORDS_BY_LANG = {
+    "es": {
+        "el", "la", "los", "las", "un", "una", "unos", "unas", "y", "o", "de", "del",
+        "en", "que", "por", "para", "con", "sin", "sobre", "este", "esta", "estos", "estas",
+        "ese", "esa", "su", "sus", "al", "se", "le", "les", "me", "te", "nos", "es", "son",
+        "fue", "era", "como", "más", "mas", "pero", "porque", "cuando", "donde", "todo", "todos",
+        "muy", "también", "tambien", "bien", "ya", "hay", "había", "habia", "hasta", "desde",
+        "capítulo", "capitulo", "página", "pagina", "libro", "sección", "seccion"
+    },
+    "en": {
+        "the", "of", "and", "to", "a", "in", "is", "you", "that", "it", "he", "was",
+        "for", "on", "are", "as", "with", "his", "they", "i", "at", "be", "this", "have",
+        "from", "or", "one", "had", "by", "word", "but", "not", "what", "all", "were",
+        "we", "when", "your", "can", "said", "there", "use", "an", "each", "which", "she",
+        "do", "how", "their", "if", "will", "up", "other", "about", "out", "many", "then",
+        "them", "these", "so", "some", "her", "would", "make", "like", "him", "into",
+        "time", "has", "look", "two", "more", "write", "go", "see", "number", "no", "way",
+        "could", "people", "my", "than", "first", "been", "call", "who", "its", "now",
+        "chapter", "section", "part", "volume", "page", "algorithms", "data", "learning",
+        "between", "under", "after", "before", "should", "could", "would", "because"
+    },
+    "fr": {
+        "le", "la", "les", "un", "une", "des", "du", "de", "et", "en", "est", "que",
+        "qui", "dans", "pour", "pas", "sur", "ce", "ces", "mais", "avec", "tout", "faire",
+        "son", "sa", "ses", "comme", "vous", "nous", "ils", "elle", "au", "aux", "ne", "cette"
+    },
+    "de": {
+        "der", "die", "das", "ein", "eine", "einer", "eines", "einem", "einen", "und",
+        "in", "zu", "den", "dem", "nicht", "von", "mit", "sich", "des", "auf", "für",
+        "ist", "im", "als", "auch", "es", "an", "werden", "aus", "er", "hat", "dass",
+        "sie", "nach", "wird", "bei", "um", "am", "sind", "noch", "wie", "über", "so"
+    },
+    "it": {
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "e", "di", "a", "da",
+        "in", "con", "su", "per", "tra", "fra", "che", "non", "si", "sono", "ma", "come",
+        "questo", "questa", "questi", "queste", "piu", "anche", "del", "della", "dei"
+    },
+    "pt": {
+        "o", "a", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das",
+        "em", "no", "na", "nos", "nas", "e", "que", "para", "com", "nao", "não", "por",
+        "mais", "como", "mas", "foi", "ao", "ele", "ela", "eles", "elas", "seu", "sua"
+    }
+}
+
+
+def detect_language(text: str, default_lang: str = "es") -> str:
+    """
+    Detecta el idioma de una frase o fragmento con alta precisión.
+    Retorna el código ISO de 2 letras ('es', 'en', 'fr', 'de', 'it', 'pt').
+    """
+    text_clean = text.strip()
+    if not text_clean:
+        return default_lang
+
+    lower = text_clean.lower()
+    if any(c in lower for c in "ñ¿¡"):
+        return "es"
+    if any(c in lower for c in "äöüß"):
+        return "de"
+    if any(c in lower for c in "ãõ"):
+        return "pt"
+    if "œ" in lower or "æ" in lower:
+        return "fr"
+
+    words = [w for w in re.findall(r"\b[^\W\d_]+\b", lower)]
+    if not words:
+        return default_lang
+
+    scores = {}
+    for lang, sw in STOPWORDS_BY_LANG.items():
+        s = sum(1 for w in words if w in sw)
+        if s > 0:
+            scores[lang] = s
+
+    if not scores:
+        return default_lang
+
+    best_lang = max(scores, key=scores.get)
+    if default_lang in scores and scores[default_lang] == scores[best_lang]:
+        return default_lang
+    return best_lang
+
+
+def resolve_voice_for_chunk(
+    chunk_lang: str,
+    base_voice: str = "mateo",
+    base_engine: str = "local"
+) -> tuple[str, str, str]:
+    """
+    Determina la voz nativa, código de idioma BCP-47 y motor óptimo para narrar un fragmento.
+    Devuelve (voice_id, lang_code, engine).
+    """
+    lang = (chunk_lang or "es").lower()
+    engine = (base_engine or "local").lower()
+    voice_lower = (base_voice or "").lower()
+
+    # Detección de género de la voz base
+    is_female = any(fem in voice_lower for fem in ("leticia", "elvira", "dalia", "paloma", "aria", "slt", "clb", "femenina", "female", "denise", "katja", "elsa", "francisca"))
+
+    if lang == "es":
+        return base_voice, "es-ES", engine
+
+    if lang == "en":
+        lang_code = "en-US"
+        if "local" in engine or "rhvoice" in engine:
+            en_voice = "local:slt" if is_female else "local:bdl"
+            return en_voice, lang_code, "local"
+        else:
+            en_voice = "edge:en-US-AriaNeural" if is_female else "edge:en-US-GuyNeural"
+            return en_voice, lang_code, "edge"
+
+    if lang == "fr":
+        lang_code = "fr-FR"
+        fr_voice = "edge:fr-FR-DeniseNeural" if is_female else "edge:fr-FR-HenriNeural"
+        return fr_voice, lang_code, "edge"
+
+    if lang == "de":
+        lang_code = "de-DE"
+        de_voice = "edge:de-DE-KatjaNeural" if is_female else "edge:de-DE-ConradNeural"
+        return de_voice, lang_code, "edge"
+
+    if lang == "it":
+        lang_code = "it-IT"
+        it_voice = "edge:it-IT-ElsaNeural" if is_female else "edge:it-IT-DiegoNeural"
+        return it_voice, lang_code, "edge"
+
+    if lang == "pt":
+        lang_code = "pt-BR"
+        pt_voice = "edge:pt-BR-FranciscaNeural" if is_female else "edge:pt-BR-AntonioNeural"
+        return pt_voice, lang_code, "edge"
+
+    return base_voice, "es-ES", engine
+
+
+def split_quotes_and_clauses(sentence: str) -> list[str]:
+    """Separa citas textuales en comillas para permitir cambio de acento/voz en diálogos y citas."""
+    sentence = sentence.strip()
+    matches = list(re.finditer(r'[\"“«]([^\"”»]{3,})[\"”»]', sentence))
+    if not matches:
+        return [sentence]
+    parts: list[str] = []
+    last_idx = 0
+    for m in matches:
+        start, end = m.span()
+        prefix = sentence[last_idx:start].strip()
+        quoted = sentence[start:end].strip()
+        if prefix:
+            parts.append(prefix.rstrip(" ,:;-"))
+        if quoted:
+            parts.append(quoted)
+        last_idx = end
+    suffix = sentence[last_idx:].strip().lstrip(" ,:;-")
+    if suffix:
+        parts.append(suffix)
+    return [p for p in parts if p]
+
+
+def get_section_chunks(body: str, max_chunk_len: int = 240) -> list[str]:
+    """
+    Divide una sección de texto en oraciones naturales y fragmentos ágiles.
+    Garantiza que la narración sea responsiva, que la pausa sea instantánea
+    y que frases en otros idiomas se procesen con la voz adecuada.
+    """
+    body = normalize_text(body)
+    if not body:
+        return []
+
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    all_chunks: list[str] = []
+
+    for para in paragraphs:
+        # Dividir por oraciones (. ! ? … ; : o saltos de línea)
+        raw_sentences = re.split(r"(?<=[.!?…;:])\s+|\n+", para)
+        for raw_s in raw_sentences:
+            raw_s = raw_s.strip()
+            if not raw_s:
+                continue
+
+            # Separar citas si las hay
+            sub_clauses = split_quotes_and_clauses(raw_s)
+            for clause in sub_clauses:
+                clause = clause.strip()
+                if not clause:
+                    continue
+
+                if len(clause) <= max_chunk_len:
+                    all_chunks.append(clause)
+                else:
+                    # Subdividir oraciones muy largas por comas o límites de palabras
+                    sub_parts = re.split(r"(?<=[,])\s+", clause)
+                    buf = ""
+                    for sp in sub_parts:
+                        sp = sp.strip()
+                        if not sp:
+                            continue
+                        cand = f"{buf} {sp}".strip() if buf else sp
+                        if len(cand) <= max_chunk_len:
+                            buf = cand
+                        else:
+                            if buf:
+                                all_chunks.append(buf)
+                            if len(sp) <= max_chunk_len:
+                                buf = sp
+                            else:
+                                for i in range(0, len(sp), max_chunk_len):
+                                    all_chunks.append(sp[i : i + max_chunk_len].strip())
+                                buf = ""
+                    if buf:
+                        all_chunks.append(buf)
+
+    return [c for c in all_chunks if c]
+
+
 def load_tts():
     if not HOST_PY.is_file():
         sys.exit(f"No se encuentra el motor de voz: {HOST_PY}")
@@ -102,33 +320,7 @@ def normalize_text(text: str) -> str:
 
 
 def chunk_paragraph(paragraph: str, max_len: int = MAX_CHUNK) -> list[str]:
-    paragraph = re.sub(r"\s+", " ", paragraph).strip()
-    if not paragraph:
-        return []
-    if len(paragraph) <= max_len:
-        return [paragraph]
-
-    parts = re.split(r"(?<=[.!?…])\s+", paragraph)
-    chunks: list[str] = []
-    buf = ""
-    for part in parts:
-        if not part:
-            continue
-        candidate = f"{buf} {part}".strip() if buf else part
-        if len(candidate) <= max_len:
-            buf = candidate
-        else:
-            if buf:
-                chunks.append(buf)
-            if len(part) <= max_len:
-                buf = part
-            else:
-                for i in range(0, len(part), max_len):
-                    chunks.append(part[i : i + max_len])
-                buf = ""
-    if buf:
-        chunks.append(buf)
-    return chunks
+    return get_section_chunks(paragraph, max_chunk_len=max_len)
 
 
 def read_txt(path: Path) -> list[tuple[str, str]]:
@@ -821,30 +1013,33 @@ def main() -> int:
     total_chunks = 0
     try:
         for si, (title, body) in enumerate(sections_to_read, start=start + 1):
-            save_bookmark(path, si - 1, title, args.rate, voice, engine)
-            print(f"—— {si}. {title[:72]} ——")
-            paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
-            for para in paragraphs:
-                for piece in chunk_paragraph(para):
-                    total_chunks += 1
-                    preview = piece[:90] + ("…" if len(piece) > 90 else "")
-                    print(f"  [{total_chunks}] {preview}")
-                    if args.dry_run:
-                        continue
-                    result = tts.speak(
-                        piece,
-                        args.lang,
-                        args.rate,
-                        args.pitch,
-                        args.volume,
-                        voice,
-                        engine,
-                    )
-                    if not result.get("ok"):
-                        print(f"  Error: {result.get('error', 'desconocido')}", file=sys.stderr)
-                        return 1
-                    if args.pause > 0:
-                        time.sleep(args.pause)
+            chunks = get_section_chunks(body)
+            print(f"—— {si}. {title[:72]} ({len(chunks)} frases) ——")
+            for ci, piece in enumerate(chunks):
+                total_chunks += 1
+                chunk_lang = detect_language(piece)
+                speak_voice, speak_lang, speak_engine = resolve_voice_for_chunk(chunk_lang, voice, engine)
+                save_bookmark(path, si - 1, ci, title, args.rate, voice, engine)
+
+                preview = piece[:80] + ("…" if len(piece) > 80 else "")
+                lang_tag = f"[{chunk_lang.upper()}] " if chunk_lang != "es" else ""
+                print(f"  [{total_chunks}] {lang_tag}{preview}")
+                if args.dry_run:
+                    continue
+                result = tts.speak(
+                    piece,
+                    speak_lang,
+                    args.rate,
+                    args.pitch,
+                    args.volume,
+                    speak_voice,
+                    speak_engine,
+                )
+                if not result.get("ok") and not result.get("cancelled"):
+                    print(f"  Error: {result.get('error', 'desconocido')}", file=sys.stderr)
+                    return 1
+                if args.pause > 0:
+                    time.sleep(args.pause)
     except KeyboardInterrupt:
         print("\nLectura pausada por el usuario. Progreso guardado.")
         return 0
