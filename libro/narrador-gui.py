@@ -75,6 +75,18 @@ class BookNarratorGUI:
         # Cargar voces
         self._load_voices()
 
+        # Atajos de teclado para control total
+        self.root.bind("<space>", self._on_key_space)
+        self.root.bind("<Left>", self._on_key_left)
+        self.root.bind("<Right>", self._on_key_right)
+        self.root.bind("<Escape>", self._on_key_escape)
+
+        # Guardar progreso al cerrar ventana
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Comprobar si hay lectura anterior
+        self._update_resume_button()
+
     def _setup_style(self):
         style = ttk.Style()
         try:
@@ -90,6 +102,8 @@ class BookNarratorGUI:
         self.accent_hover = "#1d4ed8"
         self.green_color = "#059669"   # Emerald 600
         self.green_hover = "#047857"
+        self.amber_color = "#d97706"   # Amber 600
+        self.amber_hover = "#b45309"
 
         self.root.configure(bg=self.bg_color)
 
@@ -106,6 +120,9 @@ class BookNarratorGUI:
 
         style.configure("Green.TButton", background=self.green_color, foreground="#ffffff", font=("Sans", 10, "bold"), padding=6)
         style.map("Green.TButton", background=[("active", self.green_hover)])
+
+        style.configure("Amber.TButton", background=self.amber_color, foreground="#ffffff", font=("Sans", 10, "bold"), padding=6)
+        style.map("Amber.TButton", background=[("active", self.amber_hover)])
 
         style.configure("Treeview", 
                         background="#1e293b", 
@@ -134,6 +151,9 @@ class BookNarratorGUI:
 
         btn_open = ttk.Button(top_bar, text="📂 Abrir Libro / PDF", command=self.open_file_dialog, style="Accent.TButton")
         btn_open.pack(side=tk.LEFT, padx=4)
+
+        self.btn_resume = ttk.Button(top_bar, text="📍 Reanudar", command=self.resume_last_book, style="Amber.TButton")
+        self.btn_resume.pack(side=tk.LEFT, padx=4)
 
         btn_export = ttk.Button(top_bar, text="💾 Guardar como MP3 (Opcional)", command=self.open_export_dialog, style="Green.TButton")
         btn_export.pack(side=tk.LEFT, padx=6)
@@ -231,19 +251,22 @@ class BookNarratorGUI:
         controls_row = ttk.Frame(bottom_card, style="Card.TFrame")
         controls_row.pack(fill=tk.X)
 
-        self.btn_prev = ttk.Button(controls_row, text="⏮ Anterior", command=self.prev_section, width=10)
+        self.btn_prev = ttk.Button(controls_row, text="⏮ Anterior (←)", command=self.prev_section, width=13)
         self.btn_prev.pack(side=tk.LEFT, padx=3)
 
-        self.btn_play = ttk.Button(controls_row, text="▶ Leer en voz alta", command=self.toggle_play, style="Accent.TButton", width=18)
+        self.btn_play = ttk.Button(controls_row, text="▶ Leer en voz alta (Espacio)", command=self.toggle_play, style="Accent.TButton", width=25)
         self.btn_play.pack(side=tk.LEFT, padx=3)
 
-        self.btn_stop = ttk.Button(controls_row, text="⏹ Detener", command=self.stop_speech, width=10)
+        self.btn_stop = ttk.Button(controls_row, text="⏹ Detener (Esc)", command=self.stop_speech, width=13)
         self.btn_stop.pack(side=tk.LEFT, padx=3)
 
-        self.btn_next = ttk.Button(controls_row, text="⏭ Siguiente", command=self.next_section, width=10)
+        self.btn_next = ttk.Button(controls_row, text="⏭ Siguiente (→)", command=self.next_section, width=13)
         self.btn_next.pack(side=tk.LEFT, padx=3)
 
-        self.status_lbl = ttk.Label(controls_row, text="Lectura en vivo (sin guardar archivo). Pulsa «Leer en voz alta» para escuchar.", style="Muted.TLabel")
+        self.page_indicator_lbl = ttk.Label(controls_row, text="", style="Card.TLabel", font=("Sans", 10, "bold"))
+        self.page_indicator_lbl.pack(side=tk.LEFT, padx=(10, 6))
+
+        self.status_lbl = ttk.Label(controls_row, text="Lectura en vivo. Barra espaciadora: pausar/reanudar. Flechas: cambiar página.", style="Muted.TLabel")
         self.status_lbl.pack(side=tk.RIGHT, padx=8)
 
     def _on_rate_change(self, val):
@@ -303,6 +326,9 @@ class BookNarratorGUI:
         self.status_lbl.configure(text="Extrayendo texto y aplicando OCR si es necesario…")
         self.root.update_idletasks()
 
+        # Consultar marcador previo de este archivo
+        saved_bm = libro_mod.get_bookmark(path)
+
         def load_worker():
             try:
                 sections = libro_mod.load_sections(path)
@@ -314,7 +340,6 @@ class BookNarratorGUI:
                         return
 
                     self.sections = sections
-                    self.current_section_idx = 0
                     has_ocr = any("(OCR)" in title for title, _ in sections)
                     ocr_note = " · con OCR" if has_ocr else ""
                     self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones{ocr_note})")
@@ -325,14 +350,26 @@ class BookNarratorGUI:
                         chars = len(body)
                         self.tree.insert("", tk.END, iid=str(i), text=f"{i + 1}. {title}", values=(f"{chars:,} c.",))
 
-                    if self.sections:
-                        self.tree.selection_set("0")
-                        self.tree.see("0")
-                        self._display_section(0)
-                        # Empezar a narrar inmediatamente en seguida de analizarlo
-                        self.root.after(100, self.start_speech)
+                    # Determinar si reanudamos en el punto guardado
+                    start_target = 0
+                    is_resumed = False
+                    if saved_bm:
+                        s_idx = saved_bm.get("section_idx", 0)
+                        if 0 <= s_idx < len(self.sections):
+                            start_target = s_idx
+                            is_resumed = (start_target > 0)
 
-                    self.status_lbl.configure(text=f"Cargado: {path.name}. Narrando automáticamente…")
+                    self.current_section_idx = start_target
+                    self._select_tree_row(start_target)
+
+                    if is_resumed:
+                        self.status_lbl.configure(text=f"📍 Reanudando en {self.sections[start_target][0]} (último punto guardado)…")
+                    else:
+                        self.status_lbl.configure(text=f"Cargado: {path.name}. Narrando automáticamente…")
+
+                    self._update_resume_button()
+                    # Iniciar narración inmediatamente después de analizar
+                    self.root.after(120, self.start_speech)
 
                 self.root.after(0, on_done)
             except Exception as e:
@@ -349,7 +386,14 @@ class BookNarratorGUI:
         if not selected:
             return
         idx = int(selected[0])
+        if idx == self.current_section_idx:
+            return
+        was_speaking = self.is_speaking
+        if was_speaking:
+            self.stop_speech()
         self._display_section(idx)
+        if was_speaking:
+            self.start_speech()
 
     def _display_section(self, idx: int):
         if idx < 0 or idx >= len(self.sections):
@@ -359,6 +403,9 @@ class BookNarratorGUI:
         self.reading_title_lbl.configure(text=f"{idx + 1}. {title}")
         self.text_view.delete("1.0", tk.END)
         self.text_view.insert("1.0", body)
+
+        pct = int((idx + 1) / len(self.sections) * 100) if self.sections else 0
+        self.page_indicator_lbl.configure(text=f"📍 Pág. {idx + 1}/{len(self.sections)} ({pct}%)")
 
     def toggle_play(self):
         if self.is_speaking:
@@ -377,7 +424,7 @@ class BookNarratorGUI:
         self.stop_requested = False
         self.is_speaking = True
         self.is_paused = False
-        self.btn_play.configure(text="⏸ Pausar")
+        self.btn_play.configure(text="⏸ Pausar (Espacio)")
         self.status_lbl.configure(text="Leyendo en vivo…")
 
         voice, engine = self.get_selected_voice_and_engine()
@@ -392,20 +439,22 @@ class BookNarratorGUI:
 
     def pause_speech(self):
         self.is_paused = True
-        self.btn_play.configure(text="▶ Reanudar")
+        self.btn_play.configure(text="▶ Reanudar (Espacio)")
         self.status_lbl.configure(text="Lectura pausada.")
+        self.save_progress()
 
     def resume_speech(self):
         self.is_paused = False
-        self.btn_play.configure(text="⏸ Pausar")
+        self.btn_play.configure(text="⏸ Pausar (Espacio)")
         self.status_lbl.configure(text="Leyendo en vivo…")
 
     def stop_speech(self):
         self.stop_requested = True
         self.is_speaking = False
         self.is_paused = False
-        self.btn_play.configure(text="▶ Leer en voz alta")
+        self.btn_play.configure(text="▶ Leer en voz alta (Espacio)")
         self.status_lbl.configure(text="Lectura detenida.")
+        self.save_progress()
         try:
             host.stop_playback()
         except Exception:
@@ -414,21 +463,21 @@ class BookNarratorGUI:
     def prev_section(self):
         if self.current_section_idx > 0:
             target = self.current_section_idx - 1
-            self.tree.selection_set(str(target))
-            self.tree.see(str(target))
-            self._display_section(target)
-            if self.is_speaking:
+            was_speaking = self.is_speaking
+            if was_speaking:
                 self.stop_speech()
+            self._select_tree_row(target)
+            if was_speaking:
                 self.start_speech()
 
     def next_section(self):
         if self.current_section_idx < len(self.sections) - 1:
             target = self.current_section_idx + 1
-            self.tree.selection_set(str(target))
-            self.tree.see(str(target))
-            self._display_section(target)
-            if self.is_speaking:
+            was_speaking = self.is_speaking
+            if was_speaking:
                 self.stop_speech()
+            self._select_tree_row(target)
+            if was_speaking:
                 self.start_speech()
 
     def _speech_worker(self, start_idx: int, voice: str, engine: str, rate: float):
@@ -436,7 +485,9 @@ class BookNarratorGUI:
             if self.stop_requested:
                 break
 
+            self.current_section_idx = s_idx
             self.root.after(0, lambda idx=s_idx: self._select_tree_row(idx))
+            self.save_progress(s_idx)
             title, body = self.sections[s_idx]
             paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
 
@@ -484,6 +535,65 @@ class BookNarratorGUI:
             end_idx = f"{idx}+{len(chunk)}c"
             self.text_view.tag_add("highlight", idx, end_idx)
             self.text_view.see(idx)
+
+    def save_progress(self, section_idx: int | None = None):
+        if not self.current_file or not self.sections:
+            return
+        idx = section_idx if section_idx is not None else self.current_section_idx
+        if 0 <= idx < len(self.sections):
+            title = self.sections[idx][0]
+            voice, engine = self.get_selected_voice_and_engine()
+            rate = float(self.rate_scale.get())
+            libro_mod.save_bookmark(self.current_file, idx, title, rate, voice, engine)
+
+    def resume_last_book(self):
+        bm = libro_mod.get_last_bookmark()
+        if bm and Path(bm.get("path", "")).is_file():
+            self.load_file(Path(bm["path"]))
+        else:
+            messagebox.showinfo("Sin lecturas previas", "No hay ningún libro guardado previamente.")
+
+    def _update_resume_button(self):
+        bm = libro_mod.get_last_bookmark()
+        if bm and Path(bm.get("path", "")).is_file():
+            name = bm.get("name", "Libro")
+            idx = bm.get("section_idx", 0) + 1
+            short_name = name if len(name) <= 18 else name[:16] + "…"
+            self.btn_resume.configure(text=f"📍 Reanudar: {short_name} (pág. {idx})", state=tk.NORMAL)
+        else:
+            self.btn_resume.configure(text="📍 Reanudar (ninguno)", state=tk.DISABLED)
+
+    def check_last_file_auto_resume(self):
+        bm = libro_mod.get_last_bookmark()
+        if bm and Path(bm.get("path", "")).is_file():
+            self.load_file(Path(bm["path"]))
+
+    def _on_key_space(self, event):
+        if isinstance(event.widget, (ttk.Entry, tk.Entry)):
+            return
+        self.toggle_play()
+        return "break"
+
+    def _on_key_left(self, event):
+        if isinstance(event.widget, (ttk.Entry, tk.Entry)):
+            return
+        self.prev_section()
+        return "break"
+
+    def _on_key_right(self, event):
+        if isinstance(event.widget, (ttk.Entry, tk.Entry)):
+            return
+        self.next_section()
+        return "break"
+
+    def _on_key_escape(self, event):
+        self.stop_speech()
+        return "break"
+
+    def _on_close(self):
+        self.save_progress()
+        self.stop_speech()
+        self.root.destroy()
 
     # ==========================================
     # CREADOR Y EXPORTADOR DE AUDIOLIBROS EN MP3
@@ -689,6 +799,9 @@ def main():
     app = BookNarratorGUI(root)
     if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():
         app.load_file(Path(sys.argv[1]))
+    else:
+        # Si se abre sin argumentos, verificar y cargar automáticamente el último libro
+        app.check_last_file_auto_resume()
     root.mainloop()
 
 

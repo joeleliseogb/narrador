@@ -34,6 +34,57 @@ HOST_PY = ROOT / "native" / "narrador-host.py"
 
 MAX_CHUNK = 480
 
+CONFIG_DIR = Path.home() / ".config" / "narrador-libros"
+PROGRESS_FILE = CONFIG_DIR / "progreso.json"
+
+
+def load_bookmarks() -> dict:
+    if not PROGRESS_FILE.is_file():
+        return {}
+    try:
+        import json
+        return json.loads(PROGRESS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_bookmark(path: Path, section_idx: int, title: str = "", rate: float = 1.0, voice: str = "", engine: str = "") -> None:
+    try:
+        import json
+        PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = load_bookmarks()
+        key = str(path.resolve())
+        data["last_file"] = key
+        if "files" not in data:
+            data["files"] = {}
+        data["files"][key] = {
+            "name": path.name,
+            "path": key,
+            "section_idx": int(section_idx),
+            "title": title,
+            "rate": float(rate),
+            "voice": voice,
+            "engine": engine,
+            "updated_at": int(time.time()),
+        }
+        PROGRESS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def get_bookmark(path: Path) -> dict | None:
+    data = load_bookmarks()
+    files = data.get("files", {})
+    return files.get(str(path.resolve()))
+
+
+def get_last_bookmark() -> dict | None:
+    data = load_bookmarks()
+    last = data.get("last_file")
+    if last and Path(last).is_file():
+        return data.get("files", {}).get(last)
+    return None
+
 
 def load_tts():
     if not HOST_PY.is_file():
@@ -751,40 +802,52 @@ def main() -> int:
         sys.exit("No se extrajo texto del archivo.")
 
     start = max(1, args.from_chapter) - 1
-    sections = sections[start:]
+    if args.from_chapter == 1:
+        bm = get_bookmark(path)
+        if bm and 0 <= bm.get("section_idx", 0) < len(sections):
+            saved_idx = bm["section_idx"]
+            start = saved_idx
+            print(f"📍 Marcador encontrado: reanudando en {sections[start][0]} (sección {start + 1})")
+
+    sections_to_read = sections[start:]
     if args.max_sections > 0:
-        sections = sections[: args.max_sections]
+        sections_to_read = sections_to_read[: args.max_sections]
 
     print(f"Archivo: {path.name}")
     print(f"Motor: {engine} · Voz: {voice}")
-    print(f"Secciones a narrar: {len(sections)}")
-    print("Pulsa Ctrl+C para detener.\n")
+    print(f"Secciones a narrar: {len(sections_to_read)}")
+    print("Pulsa Ctrl+C para pausar/detener (el progreso queda guardado automáticamente).\n")
 
     total_chunks = 0
-    for si, (title, body) in enumerate(sections, start=start + 1):
-        print(f"—— {si}. {title[:72]} ——")
-        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
-        for para in paragraphs:
-            for piece in chunk_paragraph(para):
-                total_chunks += 1
-                preview = piece[:90] + ("…" if len(piece) > 90 else "")
-                print(f"  [{total_chunks}] {preview}")
-                if args.dry_run:
-                    continue
-                result = tts.speak(
-                    piece,
-                    args.lang,
-                    args.rate,
-                    args.pitch,
-                    args.volume,
-                    voice,
-                    engine,
-                )
-                if not result.get("ok"):
-                    print(f"  Error: {result.get('error', 'desconocido')}", file=sys.stderr)
-                    return 1
-                if args.pause > 0:
-                    time.sleep(args.pause)
+    try:
+        for si, (title, body) in enumerate(sections_to_read, start=start + 1):
+            save_bookmark(path, si - 1, title, args.rate, voice, engine)
+            print(f"—— {si}. {title[:72]} ——")
+            paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+            for para in paragraphs:
+                for piece in chunk_paragraph(para):
+                    total_chunks += 1
+                    preview = piece[:90] + ("…" if len(piece) > 90 else "")
+                    print(f"  [{total_chunks}] {preview}")
+                    if args.dry_run:
+                        continue
+                    result = tts.speak(
+                        piece,
+                        args.lang,
+                        args.rate,
+                        args.pitch,
+                        args.volume,
+                        voice,
+                        engine,
+                    )
+                    if not result.get("ok"):
+                        print(f"  Error: {result.get('error', 'desconocido')}", file=sys.stderr)
+                        return 1
+                    if args.pause > 0:
+                        time.sleep(args.pause)
+    except KeyboardInterrupt:
+        print("\nLectura pausada por el usuario. Progreso guardado.")
+        return 0
 
     print(f"\nFin ({total_chunks} fragmentos).")
     return 0
