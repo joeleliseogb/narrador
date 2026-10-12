@@ -49,20 +49,30 @@ echo "✓ Ejecutable creado en: $LAUNCHER"
 
 # 4. Instalar iconos en el tema del sistema
 echo "🎨 Instalando iconos de la aplicación..."
+mkdir -p "$ICON_BASE/scalable/apps"
+mkdir -p "$ICON_BASE/512x512/apps"
 mkdir -p "$ICON_BASE/256x256/apps"
 mkdir -p "$ICON_BASE/128x128/apps"
+mkdir -p "$ICON_BASE/64x64/apps"
 mkdir -p "$ICON_BASE/48x48/apps"
+mkdir -p "$ICON_BASE/32x32/apps"
 mkdir -p "$ICON_BASE/16x16/apps"
 mkdir -p "$HOME/.local/share/pixmaps"
 
+[ -f "$DIR/icons/narrador.svg" ] && cp "$DIR/icons/narrador.svg" "$ICON_BASE/scalable/apps/narrador.svg"
+[ -f "$DIR/icons/icon512.png" ] && cp "$DIR/icons/icon512.png" "$ICON_BASE/512x512/apps/narrador.png"
 [ -f "$DIR/icons/icon256.png" ] && cp "$DIR/icons/icon256.png" "$ICON_BASE/256x256/apps/narrador.png"
 [ -f "$DIR/icons/icon128.png" ] && cp "$DIR/icons/icon128.png" "$ICON_BASE/128x128/apps/narrador.png"
+[ -f "$DIR/icons/icon64.png" ] && cp "$DIR/icons/icon64.png" "$ICON_BASE/64x64/apps/narrador.png"
 [ -f "$DIR/icons/icon48.png" ] && cp "$DIR/icons/icon48.png" "$ICON_BASE/48x48/apps/narrador.png"
+[ -f "$DIR/icons/icon32.png" ] && cp "$DIR/icons/icon32.png" "$ICON_BASE/32x32/apps/narrador.png"
 [ -f "$DIR/icons/icon16.png" ] && cp "$DIR/icons/icon16.png" "$ICON_BASE/16x16/apps/narrador.png"
 
 # Iconos de respaldo en pixmaps y tema base
+[ -f "$DIR/icons/narrador.svg" ] && cp "$DIR/icons/narrador.svg" "$HOME/.local/share/pixmaps/narrador.svg" 2>/dev/null || true
 [ -f "$DIR/icons/icon256.png" ] && cp "$DIR/icons/icon256.png" "$HOME/.local/share/pixmaps/narrador.png" 2>/dev/null || true
 [ -f "$DIR/icons/icon128.png" ] && cp "$DIR/icons/icon128.png" "$HOME/.local/share/icons/narrador.png" 2>/dev/null || true
+[ -f "$DIR/icons/narrador.svg" ] && cp "$DIR/icons/narrador.svg" "$HOME/.local/share/icons/narrador.svg" 2>/dev/null || true
 
 # Eliminar accesos directos obsoletos o duplicados si existían
 rm -f "$APP_DIR/narrador-libros.desktop"

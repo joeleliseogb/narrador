@@ -244,7 +244,7 @@ class BookNarratorGUI:
             except Exception:
                 pass
         photos = []
-        for s in (256, 128, 48, 16):
+        for s in (512, 256, 128, 64, 48, 32, 16):
             p = ROOT / "icons" / f"icon{s}.png"
             if p.is_file():
                 try:
