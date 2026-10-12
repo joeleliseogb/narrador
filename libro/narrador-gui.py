@@ -127,7 +127,7 @@ class BookNarratorGUI:
         btn_open = ttk.Button(top_bar, text="📂 Abrir Libro / PDF", command=self.open_file_dialog, style="Accent.TButton")
         btn_open.pack(side=tk.LEFT, padx=4)
 
-        btn_export = ttk.Button(top_bar, text="🎙️ Crear MP3 (Audiolibro)", command=self.open_export_dialog, style="Green.TButton")
+        btn_export = ttk.Button(top_bar, text="💾 Guardar como MP3 (Opcional)", command=self.open_export_dialog, style="Green.TButton")
         btn_export.pack(side=tk.LEFT, padx=6)
 
         self.file_info_lbl = ttk.Label(top_bar, text="Ningún archivo cargado", style="Muted.TLabel")
@@ -226,7 +226,7 @@ class BookNarratorGUI:
         self.btn_prev = ttk.Button(controls_row, text="⏮ Anterior", command=self.prev_section, width=10)
         self.btn_prev.pack(side=tk.LEFT, padx=3)
 
-        self.btn_play = ttk.Button(controls_row, text="▶ Reproducir", command=self.toggle_play, style="Accent.TButton", width=14)
+        self.btn_play = ttk.Button(controls_row, text="▶ Leer en voz alta", command=self.toggle_play, style="Accent.TButton", width=18)
         self.btn_play.pack(side=tk.LEFT, padx=3)
 
         self.btn_stop = ttk.Button(controls_row, text="⏹ Detener", command=self.stop_speech, width=10)
@@ -235,7 +235,7 @@ class BookNarratorGUI:
         self.btn_next = ttk.Button(controls_row, text="⏭ Siguiente", command=self.next_section, width=10)
         self.btn_next.pack(side=tk.LEFT, padx=3)
 
-        self.status_lbl = ttk.Label(controls_row, text="Listo.", style="Muted.TLabel")
+        self.status_lbl = ttk.Label(controls_row, text="Lectura en vivo (sin guardar archivo). Pulsa «Leer en voz alta» para escuchar.", style="Muted.TLabel")
         self.status_lbl.pack(side=tk.RIGHT, padx=8)
 
     def _on_rate_change(self, val):
@@ -368,7 +368,7 @@ class BookNarratorGUI:
         self.is_speaking = True
         self.is_paused = False
         self.btn_play.configure(text="⏸ Pausar")
-        self.status_lbl.configure(text="Narrando…")
+        self.status_lbl.configure(text="Leyendo en vivo…")
 
         voice, engine = self.get_selected_voice_and_engine()
         rate = float(self.rate_scale.get())
@@ -383,19 +383,19 @@ class BookNarratorGUI:
     def pause_speech(self):
         self.is_paused = True
         self.btn_play.configure(text="▶ Reanudar")
-        self.status_lbl.configure(text="Pausado.")
+        self.status_lbl.configure(text="Lectura pausada.")
 
     def resume_speech(self):
         self.is_paused = False
         self.btn_play.configure(text="⏸ Pausar")
-        self.status_lbl.configure(text="Narrando…")
+        self.status_lbl.configure(text="Leyendo en vivo…")
 
     def stop_speech(self):
         self.stop_requested = True
         self.is_speaking = False
         self.is_paused = False
-        self.btn_play.configure(text="▶ Reproducir")
-        self.status_lbl.configure(text="Detenido.")
+        self.btn_play.configure(text="▶ Leer en voz alta")
+        self.status_lbl.configure(text="Lectura detenida.")
         try:
             host.stop_playback()
         except Exception:
@@ -484,8 +484,8 @@ class BookNarratorGUI:
             return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Exportar Audiolibro a MP3")
-        dialog.geometry("520x420")
+        dialog.title("Guardar como Audiolibro MP3 (Opcional)")
+        dialog.geometry("540x440")
         dialog.resizable(False, False)
         dialog.configure(bg=self.card_bg)
         dialog.transient(self.root)
@@ -494,9 +494,10 @@ class BookNarratorGUI:
         # Opciones
         pad = {"padx": 16, "pady": 8}
 
-        ttk.Label(dialog, text="🎙️ Crear Archivo MP3", style="Header.TLabel").pack(anchor=tk.W, **pad)
+        ttk.Label(dialog, text="💾 Guardar como MP3", style="Header.TLabel").pack(anchor=tk.W, **pad)
+        ttk.Label(dialog, text="Crea un archivo de audio permanente en tu disco solo si deseas conservarlo.", style="Muted.TLabel").pack(anchor=tk.W, padx=16, pady=(0, 6))
 
-        range_frame = ttk.LabelFrame(dialog, text="Rango a exportar", padding=10)
+        range_frame = ttk.LabelFrame(dialog, text="Rango a guardar", padding=10)
         range_frame.pack(fill=tk.X, **pad)
 
         range_var = tk.StringVar(value="all")

@@ -770,6 +770,12 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
         dur_ms = measured_ms or estimate_duration_ms(text, rate)
         play_ms = wait_playback_done(timeout_sec=max(30, dur_ms // 1000 + 20))
         actual_ms = play_ms or dur_ms
+        try:
+            if os.path.isfile(tmp_path):
+                os.unlink(tmp_path)
+            _play_tmp = None
+        except OSError:
+            pass
         return {
             "ok": True,
             "blocking": True,
@@ -779,7 +785,9 @@ def speak_edge(text, voice, rate=1.0, pitch=1.0, volume=1.0):
         }
     except Exception:
         try:
-            os.unlink(tmp_path)
+            if os.path.isfile(tmp_path):
+                os.unlink(tmp_path)
+            _play_tmp = None
         except OSError:
             pass
         raise
