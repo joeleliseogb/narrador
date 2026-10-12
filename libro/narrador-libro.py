@@ -11,13 +11,23 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Asegurar acceso a paquetes de usuario (~/.local/lib/python3.x/site-packages)
+try:
+    _user_site = site.getusersitepackages()
+    if _user_site and _user_site not in sys.path:
+        sys.path.insert(0, _user_site)
+except Exception:
+    pass
 
 ROOT = Path(__file__).resolve().parent.parent
 HOST_PY = ROOT / "native" / "narrador-host.py"
@@ -358,22 +368,104 @@ def clean_ocr_text(text: str) -> str:
     return text.strip()
 
 
-def ocr_pixmap(pix, lang: str = "spa+eng") -> str:
-    """Ejecuta OCR sobre una imagen renderizada con Tesseract en español e inglés."""
+def find_tesseract_bin() -> str | None:
+    for candidate in ("/usr/bin/tesseract", "/usr/local/bin/tesseract"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return shutil.which("tesseract")
+
+
+def find_tessdata_dir() -> tuple[Path | None, str]:
+    """Busca el directorio tessdata y determina los idiomas disponibles (spa, eng, spa+eng)."""
+    candidates = [
+        ROOT / "libro" / "tessdata",
+        Path.home() / ".local" / "share" / "tessdata",
+        Path("/usr/share/tesseract/tessdata"),
+    ]
+    for d in candidates:
+        if d.is_dir():
+            has_spa = (d / "spa.traineddata").is_file()
+            has_eng = (d / "eng.traineddata").is_file()
+            if has_spa and has_eng:
+                return d, "spa+eng"
+            if has_spa:
+                return d, "spa"
+            if has_eng:
+                return d, "eng"
+    return None, "eng"
+
+
+def run_tesseract_ocr(img_source: Path | str | bytes | object, lang: str | None = None) -> str:
+    """Ejecuta OCR infalible usando tesseract directamente o pytesseract como respaldo.
+    Acepta: Path, ruta str, bytes de imagen, o PyMuPDF Pixmap / PIL Image.
+    """
+    tess_bin = find_tesseract_bin()
+    tessdata_dir, default_lang = find_tessdata_dir()
+    use_lang = lang or default_lang
+
+    tmp_path: Path | None = None
+    input_file: str = ""
+
+    if isinstance(img_source, (str, Path)) and os.path.isfile(str(img_source)):
+        input_file = str(img_source)
+    else:
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        input_file = str(tmp_path)
+
+        if hasattr(img_source, "save"):
+            # PyMuPDF Pixmap o PIL Image
+            img_source.save(str(tmp_path))
+        elif isinstance(img_source, bytes):
+            tmp_path.write_bytes(img_source)
+        else:
+            try:
+                from PIL import Image
+                if hasattr(img_source, "samples") and hasattr(img_source, "width") and hasattr(img_source, "height"):
+                    img = Image.frombytes("RGB", [img_source.width, img_source.height], img_source.samples)
+                    img.save(str(tmp_path))
+            except Exception:
+                pass
+
     try:
-        import pytesseract
-        from PIL import Image
+        # Intento A: Invocar tesseract CLI directamente (más robusto y sin dependencias de Python)
+        if tess_bin and os.path.isfile(input_file) and os.path.getsize(input_file) > 0:
+            cmd = [tess_bin, input_file, "stdout", "-l", use_lang, "--psm", "3"]
+            if tessdata_dir:
+                cmd.extend(["--tessdata-dir", str(tessdata_dir)])
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if proc.returncode == 0 and proc.stdout.strip():
+                return clean_ocr_text(proc.stdout)
 
-        tessdata = os.path.expanduser("~/.local/share/tessdata")
-        if os.path.isdir(tessdata):
-            os.environ["TESSDATA_PREFIX"] = tessdata
+        # Intento B: Si hay pytesseract y falló la orden directa
+        try:
+            import pytesseract
+            from PIL import Image
+            if tessdata_dir:
+                os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
+            with Image.open(input_file) as im:
+                txt = pytesseract.image_to_string(im, lang=use_lang)
+                if txt.strip():
+                    return clean_ocr_text(txt)
+        except Exception:
+            pass
 
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        text = pytesseract.image_to_string(img, lang=lang)
-        return clean_ocr_text(text)
     except Exception as e:
         print(f"Aviso OCR: {e}", file=sys.stderr)
-        return ""
+    finally:
+        if tmp_path and tmp_path.is_file():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    return ""
+
+
+def ocr_pixmap(pix, lang: str | None = None) -> str:
+    """Ejecuta OCR sobre una imagen renderizada con Tesseract en español e inglés."""
+    return run_tesseract_ocr(pix, lang=lang)
 
 
 def extract_tables_from_page(page) -> str:
@@ -411,13 +503,6 @@ def extract_figures_and_diagrams(page, existing_text: str) -> str:
             return ""
         doc = page.parent
         fig_texts = []
-        import io
-        import pytesseract
-        from PIL import Image
-
-        tessdata = os.path.expanduser("~/.local/share/tessdata")
-        if os.path.isdir(tessdata):
-            os.environ["TESSDATA_PREFIX"] = tessdata
 
         for img_idx, img_info in enumerate(image_list, 1):
             xref = img_info[0]
@@ -427,13 +512,13 @@ def extract_figures_and_diagrams(page, existing_text: str) -> str:
             width = base_img.get("width", 0)
             height = base_img.get("height", 0)
             # Descartar iconos o adornos pequeños
-            if width < 140 or height < 140:
+            if width < 120 or height < 120:
                 continue
 
-            img = Image.open(io.BytesIO(base_img["image"]))
-            txt = pytesseract.image_to_string(img, lang="spa+eng").strip()
+            img_bytes = base_img["image"]
+            txt = run_tesseract_ocr(img_bytes)
             cleaned = clean_ocr_text(txt)
-            if cleaned and len(cleaned) > 12:
+            if cleaned and len(cleaned) > 10:
                 sample = cleaned[:30]
                 if sample not in existing_text:
                     fig_texts.append(f"\n[Datos de Gráfica / Figura {img_idx}]:\n{cleaned}")
@@ -460,17 +545,21 @@ def read_pdf_pymupdf(path: Path) -> list[tuple[str, str]] | None:
             vector_text = normalize_text(page.get_text("text"))
             tables_text = extract_tables_from_page(page)
 
-            # Si la página tiene menos de 50 caracteres vectoriales, es un escaneo o foto
-            is_scanned = len(vector_text.strip()) < 50
-            ocr_text = ""
-            if is_scanned:
-                # Renderizar página en alta resolución para OCR nítido
-                pix = page.get_pixmap(dpi=200)
-                ocr_text = ocr_pixmap(pix, lang="spa+eng")
+            # Criterio para OCR:
+            # 1. Menos de 100 caracteres vectoriales: suele ser escaneo/foto completo.
+            # 2. O menos de 250 caracteres vectoriales pero contiene imágenes incrustadas.
+            images_on_page = page.get_images()
+            needs_full_ocr = len(vector_text.strip()) < 100 or (len(vector_text.strip()) < 250 and len(images_on_page) > 0)
 
-            # Si es texto normal pero contiene gráficas con datos incrustados
+            ocr_text = ""
+            if needs_full_ocr:
+                pix = page.get_pixmap(dpi=200)
+                ocr_candidate = ocr_pixmap(pix)
+                if len(ocr_candidate.strip()) > len(vector_text.strip()):
+                    ocr_text = ocr_candidate
+
             fig_text = ""
-            if not is_scanned:
+            if not ocr_text:
                 fig_text = extract_figures_and_diagrams(page, vector_text)
 
             parts = []
@@ -486,7 +575,7 @@ def read_pdf_pymupdf(path: Path) -> list[tuple[str, str]] | None:
 
             body = "\n\n".join(p for p in parts if p.strip()).strip()
             if body:
-                label_suffix = " (OCR)" if is_scanned else ""
+                label_suffix = " (OCR)" if (ocr_text and not vector_text) else ""
                 sections.append((f"Página {i + 1}{label_suffix}", body))
     finally:
         doc.close()
@@ -495,23 +584,40 @@ def read_pdf_pymupdf(path: Path) -> list[tuple[str, str]] | None:
 
 def read_pdf_poppler(path: Path) -> list[tuple[str, str]] | None:
     pdftotext = shutil.which("pdftotext")
-    if not pdftotext:
-        return None
-    try:
-        proc = subprocess.run(
-            [pdftotext, "-layout", str(path), "-"],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0 or not (proc.stdout or "").strip():
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftotext and not pdftoppm:
         return None
 
-    raw_pages = proc.stdout.split("\f")
+    raw_pages: list[str] = []
+    if pdftotext:
+        try:
+            proc = subprocess.run(
+                [pdftotext, "-layout", str(path), "-"],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                raw_pages = proc.stdout.split("\f")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     sections: list[tuple[str, str]] = []
+
+    # Si pdftotext no extrajo texto legible (típico en PDFs escaneados), renderizar con pdftoppm + OCR
+    total_text = "".join(raw_pages).strip()
+    if len(total_text) < 100 and pdftoppm:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd = [pdftoppm, "-png", "-r", "150", str(path), str(Path(tmpdir) / "page")]
+            subprocess.run(cmd, capture_output=True, timeout=300)
+            rendered = sorted(Path(tmpdir).glob("page-*.png"))
+            for idx, p_img in enumerate(rendered, 1):
+                txt = run_tesseract_ocr(p_img)
+                if txt.strip():
+                    sections.append((f"Página {idx} (OCR)", txt.strip()))
+        return sections if sections else None
+
     for i, page in enumerate(raw_pages):
         body = pdf_lines_to_body(normalize_text(page))
         if body.strip():
@@ -521,21 +627,9 @@ def read_pdf_poppler(path: Path) -> list[tuple[str, str]] | None:
 
 def read_image_file(path: Path) -> list[tuple[str, str]]:
     """Lee archivos de imagen directa (escaneos, fotos, capturas) usando OCR."""
-    try:
-        import pytesseract
-        from PIL import Image
-
-        tessdata = os.path.expanduser("~/.local/share/tessdata")
-        if os.path.isdir(tessdata):
-            os.environ["TESSDATA_PREFIX"] = tessdata
-
-        img = Image.open(path)
-        text = pytesseract.image_to_string(img, lang="spa+eng")
-        cleaned = clean_ocr_text(text)
-        if cleaned.strip():
-            return [(f"Imagen: {path.name} (OCR)", cleaned)]
-    except Exception as e:
-        print(f"Error al leer imagen con OCR: {e}", file=sys.stderr)
+    text = run_tesseract_ocr(path)
+    if text.strip():
+        return [(f"Imagen: {path.name} (OCR)", text)]
     return []
 
 

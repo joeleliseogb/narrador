@@ -24,6 +24,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "libro"))
 sys.path.insert(0, str(ROOT / "native"))
 
+import site
+try:
+    _user_site = site.getusersitepackages()
+    if _user_site and _user_site not in sys.path:
+        sys.path.insert(0, _user_site)
+except Exception:
+    pass
+
 import importlib.util
 
 # Cargar módulo narrador-host
@@ -321,8 +329,10 @@ class BookNarratorGUI:
                         self.tree.selection_set("0")
                         self.tree.see("0")
                         self._display_section(0)
+                        # Empezar a narrar inmediatamente en seguida de analizarlo
+                        self.root.after(100, self.start_speech)
 
-                    self.status_lbl.configure(text=f"Cargado con éxito: {path.name}. Listo para narrar o crear MP3.")
+                    self.status_lbl.configure(text=f"Cargado: {path.name}. Narrando automáticamente…")
 
                 self.root.after(0, on_done)
             except Exception as e:
