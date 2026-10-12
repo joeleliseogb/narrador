@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # Asegurar acceso a paquetes de usuario (~/.local/lib/python3.x/site-packages)
@@ -139,8 +141,280 @@ def clear_cache_for_file(path: Path) -> None:
             json_path.unlink(missing_ok=True)
         if txt_path.is_file():
             txt_path.unlink(missing_ok=True)
+        tr_json, tr_txt = get_translation_cache_files(path, "es")
+        if tr_json.is_file():
+            tr_json.unlink(missing_ok=True)
+        if tr_txt.is_file():
+            tr_txt.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def get_translation_cache_files(path: Path, target_lang: str = "es") -> tuple[Path, Path]:
+    """Retorna las rutas para el caché estructurado JSON y el archivo .txt traducido al español."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    resolved = str(path.resolve())
+    h = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
+    safe_name = re.sub(r"[^\w\.-]", "_", path.stem)[:32]
+    json_path = CACHE_DIR / f"{safe_name}_{h}_{target_lang}.json"
+    txt_path = CACHE_DIR / f"{safe_name}_{h}_{target_lang}.txt"
+    return json_path, txt_path
+
+
+def is_translation_cached(path: Path, target_lang: str = "es") -> bool:
+    """Comprueba si existe una traducción al español válida y actualizada en caché."""
+    if not path.is_file():
+        return False
+    json_path, _ = get_translation_cache_files(path, target_lang)
+    if not json_path.is_file():
+        return False
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        stat = path.stat()
+        return (
+            data.get("file_path") == str(path.resolve())
+            and data.get("mtime_ns") == stat.st_mtime_ns
+            and data.get("size_bytes") == stat.st_size
+            and bool(data.get("sections"))
+        )
+    except Exception:
+        return False
+
+
+def load_translated_cached_sections(path: Path, target_lang: str = "es") -> tuple[list[tuple[str, str]], str] | None:
+    """Carga las secciones traducidas al español directamente del caché en milisegundos."""
+    if not is_translation_cached(path, target_lang):
+        return None
+    json_path, _ = get_translation_cache_files(path, target_lang)
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        raw_sections = data.get("sections", [])
+        source_lang = data.get("source_lang", "auto")
+        sections: list[tuple[str, str]] = []
+        for s in raw_sections:
+            if isinstance(s, dict):
+                title = str(s.get("title", ""))
+                body = str(s.get("body", ""))
+                if body.strip():
+                    sections.append((title, body))
+            elif isinstance(s, (list, tuple)) and len(s) == 2:
+                sections.append((str(s[0]), str(s[1])))
+        if sections:
+            return sections, source_lang
+        return None
+    except Exception as e:
+        print(f"Aviso leyendo caché de traducción: {e}", file=sys.stderr)
+        return None
+
+
+def save_translated_cached_sections(
+    path: Path,
+    sections: list[tuple[str, str]],
+    source_lang: str = "auto",
+    target_lang: str = "es"
+) -> tuple[Path, Path] | None:
+    """Guarda las secciones traducidas en caché JSON y en texto plano (.txt) en español."""
+    if not path.is_file() or not sections:
+        return None
+    try:
+        json_path, txt_path = get_translation_cache_files(path, target_lang)
+        stat = path.stat()
+        payload = {
+            "file_path": str(path.resolve()),
+            "file_name": path.name,
+            "mtime_ns": stat.st_mtime_ns,
+            "size_bytes": stat.st_size,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "cached_at": int(time.time()),
+            "sections_count": len(sections),
+            "sections": [{"title": title, "body": body} for title, body in sections],
+        }
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        export_sections_to_txt(
+            sections,
+            txt_path,
+            doc_name=f"{path.name} (Traducido al Español)",
+            source_path=str(path.resolve())
+        )
+        return json_path, txt_path
+    except Exception as e:
+        print(f"Aviso guardando caché de traducción: {e}", file=sys.stderr)
+        return None
+
+
+def _translate_single_block(text: str, source_lang: str = "auto", timeout: float = 12.0) -> tuple[str, str]:
+    """Envía un bloque de texto a Google Translate neuronal (POST) y retorna (texto, idioma_detectado)."""
+    text_clean = text.strip()
+    if not text_clean:
+        return text, source_lang
+    req_sl = source_lang if source_lang in ("en", "fr", "de", "it", "pt") else "auto"
+    url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={urllib.parse.quote(req_sl)}&tl=es&dt=t"
+    data = urllib.parse.urlencode({"q": text_clean}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+        },
+    )
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                det_lang = raw[2] if len(raw) > 2 and isinstance(raw[2], str) else source_lang
+                translated = "".join(part[0] for part in raw[0] if part and part[0])
+                return (translated if translated.strip() else text), det_lang
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.4)
+            else:
+                return text, source_lang
+    return text, source_lang
+
+
+def translate_text_to_spanish(text: str, source_lang: str = "auto", timeout: float = 12.0) -> tuple[str, str]:
+    """
+    Traduce texto al español usando el endpoint neuronal de Google Translate.
+    Devuelve (texto_traducido, idioma_origen_detectado).
+    Soporta textos largos dividiéndolos en párrafos y bloques seguros (<2200 caracteres).
+    """
+    if not text or not text.strip():
+        return text, source_lang
+
+    if len(text) <= 2200:
+        return _translate_single_block(text, source_lang=source_lang, timeout=timeout)
+
+    paragraphs = text.split("\n\n")
+    translated_paras: list[str] = []
+    detected_lang = source_lang
+
+    cur_block: list[str] = []
+    cur_len = 0
+
+    def flush_block():
+        nonlocal cur_block, cur_len, detected_lang
+        if not cur_block:
+            return
+        combined = "\n\n".join(cur_block)
+        trans, det = _translate_single_block(combined, source_lang=source_lang, timeout=timeout)
+        if det not in ("auto", "unknown", "es"):
+            detected_lang = det
+        translated_paras.append(trans)
+        cur_block = []
+        cur_len = 0
+
+    for p in paragraphs:
+        if cur_len + len(p) > 1900:
+            flush_block()
+        if len(p) > 1900:
+            sentences = re.split(r"(?<=[.!?])\s+", p)
+            s_block: list[str] = []
+            s_len = 0
+            for s in sentences:
+                if s_len + len(s) > 1700:
+                    trans, det = _translate_single_block(" ".join(s_block), source_lang=source_lang, timeout=timeout)
+                    if det not in ("auto", "unknown", "es"):
+                        detected_lang = det
+                    translated_paras.append(trans)
+                    s_block = []
+                    s_len = 0
+                s_block.append(s)
+                s_len += len(s)
+            if s_block:
+                trans, det = _translate_single_block(" ".join(s_block), source_lang=source_lang, timeout=timeout)
+                if det not in ("auto", "unknown", "es"):
+                    detected_lang = det
+                translated_paras.append(trans)
+        else:
+            cur_block.append(p)
+            cur_len += len(p)
+
+    flush_block()
+    return "\n\n".join(translated_paras), detected_lang
+
+
+def detect_document_language(sections: list[tuple[str, str]]) -> str:
+    """
+    Analiza una muestra de las secciones para determinar el idioma principal del documento.
+    Retorna el código ISO ('es', 'en', 'fr', 'de', 'it', 'pt', etc.).
+    """
+    if not sections:
+        return "es"
+    sample_parts: list[str] = []
+    total_len = 0
+    for _, body in sections[:6]:
+        b = body.strip()
+        if b:
+            sample_parts.append(b[:800])
+            total_len += len(sample_parts[-1])
+            if total_len > 2500:
+                break
+    sample_text = " ".join(sample_parts)
+    return detect_language(sample_text, default_lang="es")
+
+
+def translate_sections_to_spanish(
+    sections: list[tuple[str, str]],
+    source_path: Path | None = None,
+    force: bool = False,
+    progress_callback=None,
+    cancel_check=None,
+) -> tuple[list[tuple[str, str]], str]:
+    """
+    Traduce todas las secciones del documento al español y las almacena en el formato de caché optimizado.
+    Retorna (secciones_en_español, idioma_detectado).
+    """
+    if not sections:
+        return [], "es"
+
+    # Si hay caché de traducción y no forzamos re-traducción, cargar al instante (~0.01s)
+    if source_path and not force:
+        cached = load_translated_cached_sections(source_path, target_lang="es")
+        if cached:
+            return cached
+
+    doc_lang = detect_document_language(sections)
+    if doc_lang == "es" and not force:
+        return sections, "es"
+
+    total = len(sections)
+    translated_sections: list[tuple[str, str]] = []
+    overall_detected = doc_lang
+
+    for i, (title, body) in enumerate(sections):
+        if cancel_check and cancel_check():
+            break
+
+        if progress_callback:
+            progress_callback(i, total, f"Traduciendo sección {i + 1}/{total}: {title[:32]}…")
+
+        tr_title = title
+        if any(w in title.lower() for w in ("chapter", "section", "part", "page", "table", "figure", "index")):
+            t_trans, _ = translate_text_to_spanish(title, source_lang=overall_detected)
+            if t_trans and t_trans.strip():
+                tr_title = t_trans.strip()
+
+        tr_body, det = translate_text_to_spanish(body, source_lang=overall_detected)
+        if det not in ("auto", "unknown", "es"):
+            overall_detected = det
+
+        translated_sections.append((tr_title, tr_body))
+
+    if cancel_check and cancel_check():
+        return sections, overall_detected
+
+    if source_path and translated_sections:
+        save_translated_cached_sections(source_path, translated_sections, source_lang=overall_detected, target_lang="es")
+
+    if progress_callback:
+        progress_callback(total, total, "Traducción al español finalizada.")
+
+    return translated_sections, overall_detected
 
 
 def export_sections_to_txt(
@@ -1263,6 +1537,11 @@ def parse_args() -> argparse.Namespace:
         help="Ignorar caché existente y forzar un nuevo análisis completo con OCR",
     )
     parser.add_argument(
+        "--translate-es",
+        action="store_true",
+        help="Traducir el documento al español antes de narrar, exportar TXT o exportar MP3",
+    )
+    parser.add_argument(
         "--export-txt",
         type=Path,
         metavar="RUTA_TXT",
@@ -1322,6 +1601,19 @@ def main() -> int:
         print(f"   (Usa --force-ocr si deseas forzar un nuevo análisis completo).")
     else:
         print(f"💾 Texto y OCR extraídos y almacenados en caché para próximas aperturas.")
+
+    doc_lang = detect_document_language(sections)
+    if args.translate_es or (doc_lang != "es" and is_translation_cached(path) and not args.force_reload):
+        print(f"🌐 Cargando versión traducida al español (idioma detectado: {doc_lang.upper()})…")
+        def on_cli_trans(curr, tot, msg):
+            print(f"   [{curr}/{tot}] {msg}")
+        sections, doc_lang = translate_sections_to_spanish(
+            sections,
+            source_path=path,
+            force=args.force_reload,
+            progress_callback=on_cli_trans,
+        )
+        print(f"✅ Secciones procesadas en español ({len(sections)} secciones).")
 
     if args.export_txt:
         export_sections_to_txt(sections, args.export_txt, doc_name=path.name, source_path=str(path))

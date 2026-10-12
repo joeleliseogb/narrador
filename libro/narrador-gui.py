@@ -56,7 +56,11 @@ class BookNarratorGUI:
 
         # Estado
         self.current_file: Path | None = None
-        self.sections: list[tuple[str, str]] = []  # [(title, body)]
+        self.sections: list[tuple[str, str]] = []  # Secciones activas (original o español)
+        self.original_sections: list[tuple[str, str]] = []
+        self.translated_sections: list[tuple[str, str]] = []
+        self.doc_language = "es"
+        self.translate_to_spanish_var = tk.BooleanVar(value=False)
         self.current_section_idx = -1
         self.current_chunk_idx = 0
         self.is_speaking = False
@@ -164,6 +168,15 @@ class BookNarratorGUI:
 
         self.btn_force_ocr = ttk.Button(top_bar, text="🔄 Re-analizar OCR", command=self.reload_force_ocr, state=tk.DISABLED)
         self.btn_force_ocr.pack(side=tk.LEFT, padx=4)
+
+        self.btn_translate = ttk.Checkbutton(
+            top_bar,
+            text="🌐 Traducir al Español",
+            variable=self.translate_to_spanish_var,
+            command=self._on_toggle_translate,
+            state=tk.DISABLED,
+        )
+        self.btn_translate.pack(side=tk.LEFT, padx=4)
 
         btn_export = ttk.Button(top_bar, text="💾 Guardar como MP3 (Opcional)", command=self.open_export_dialog, style="Green.TButton")
         btn_export.pack(side=tk.LEFT, padx=6)
@@ -375,18 +388,28 @@ class BookNarratorGUI:
                         self.status_lbl.configure(text="Listo.")
                         return
 
-                    self.sections = sections
-                    has_ocr = any("(OCR)" in title for title, _ in sections)
-                    badge = " · ⚡ Caché instantáneo" if is_from_cache else (" · con OCR" if has_ocr else "")
-                    self.file_info_lbl.configure(text=f"Archivo: {path.name} ({len(sections)} secciones{badge})")
+                    self.original_sections = sections
+                    self.doc_language = libro_mod.detect_document_language(sections)
+
+                    cached_tr = libro_mod.load_translated_cached_sections(path, target_lang="es")
+                    if cached_tr:
+                        self.translated_sections = cached_tr[0]
+                    else:
+                        self.translated_sections = []
+
+                    self.btn_translate.configure(state=tk.NORMAL)
                     self.btn_export_txt.configure(state=tk.NORMAL)
                     self.btn_force_ocr.configure(state=tk.NORMAL)
 
-                    # Llenar árbol
-                    self.tree.delete(*self.tree.get_children())
-                    for i, (title, body) in enumerate(self.sections):
-                        chars = len(body)
-                        self.tree.insert("", tk.END, iid=str(i), text=f"{i + 1}. {title}", values=(f"{chars:,} c.",))
+                    # Si el documento no está en español y tenemos caché de traducción, activar traducción automáticamente
+                    if self.doc_language != "es" and self.translated_sections:
+                        self.translate_to_spanish_var.set(True)
+                        self.sections = self.translated_sections
+                    else:
+                        self.translate_to_spanish_var.set(False)
+                        self.sections = self.original_sections
+
+                    self._update_file_info_header()
 
                     # Determinar si reanudamos en el punto guardado
                     start_target = 0
@@ -402,17 +425,36 @@ class BookNarratorGUI:
 
                     self.current_section_idx = start_target
                     self.current_chunk_idx = start_chunk
-                    self._select_tree_row(start_target)
+                    self._refresh_tree_and_view(target_section=start_target, target_chunk=start_chunk)
 
                     origin_str = " (⚡ Caché instantáneo)" if is_from_cache else ""
+                    trans_str = " (🌐 En Español)" if self.translate_to_spanish_var.get() else ""
                     if is_resumed:
-                        self.status_lbl.configure(text=f"📍 Reanudando en {self.sections[start_target][0]}{origin_str}…")
+                        self.status_lbl.configure(text=f"📍 Reanudando en {self.sections[start_target][0]}{origin_str}{trans_str}…")
                     else:
-                        self.status_lbl.configure(text=f"Cargado: {path.name}{origin_str}. Narrando automáticamente…")
+                        self.status_lbl.configure(text=f"Cargado: {path.name}{origin_str}{trans_str}. Narrando automáticamente…")
 
                     self._update_resume_button()
-                    # Iniciar narración inmediatamente después de analizar
-                    self.root.after(120, lambda: self.start_speech(from_section=start_target, from_chunk=start_chunk))
+
+                    # Si el documento no está en español y no tiene traducción en caché todavía:
+                    if self.doc_language != "es" and not self.translated_sections:
+                        def prompt_trans():
+                            ans = messagebox.askyesno(
+                                "🌐 Documento en otro idioma detectado",
+                                f"El documento '{path.name}' parece estar en {self.doc_language.upper()}.\n\n"
+                                "¿Deseas traducirlo al español automáticamente para:\n"
+                                " • Narrarlo con pronunciación fluida en español\n"
+                                " • Ver y leer el texto en español\n"
+                                " • Guardar el audiolibro MP3 en español?\n\n"
+                                "(El texto traducido se guardará en caché para que nunca tengas que esperar de nuevo)."
+                            )
+                            if ans:
+                                self.translate_book(force=False, auto_start_speech=True)
+                            else:
+                                self.root.after(100, lambda: self.start_speech(from_section=start_target, from_chunk=start_chunk))
+                        self.root.after(200, prompt_trans)
+                    else:
+                        self.root.after(120, lambda: self.start_speech(from_section=start_target, from_chunk=start_chunk))
 
                 self.root.after(0, on_done)
             except Exception as e:
@@ -424,14 +466,149 @@ class BookNarratorGUI:
 
         threading.Thread(target=load_worker, daemon=True).start()
 
+    def _update_file_info_header(self):
+        if not self.current_file:
+            self.file_info_lbl.configure(text="Ningún archivo cargado")
+            return
+        has_ocr = any("(OCR)" in title for title, _ in self.sections)
+        badge_ocr = " · con OCR" if has_ocr else ""
+        if self.translate_to_spanish_var.get():
+            badge_lang = " · 🌐 Español (Traducido)"
+        elif self.doc_language != "es":
+            badge_lang = f" · [{self.doc_language.upper()}]"
+        else:
+            badge_lang = " · [ES]"
+        self.file_info_lbl.configure(
+            text=f"Archivo: {self.current_file.name} ({len(self.sections)} secciones{badge_ocr}{badge_lang})"
+        )
+
+    def _refresh_tree_and_view(self, target_section: int = 0, target_chunk: int = 0):
+        cur_sec = max(0, min(target_section, len(self.sections) - 1)) if self.sections else 0
+        self._programmatic_tree_select = True
+        try:
+            self.tree.delete(*self.tree.get_children())
+            for i, (title, body) in enumerate(self.sections):
+                chars = len(body)
+                self.tree.insert("", tk.END, iid=str(i), text=f"{i + 1}. {title}", values=(f"{chars:,} c.",))
+        finally:
+            self._programmatic_tree_select = False
+
+        self.current_section_idx = cur_sec
+        self.current_chunk_idx = target_chunk
+        self._select_tree_row(cur_sec)
+
+    def _on_toggle_translate(self):
+        if not self.original_sections:
+            return
+
+        was_speaking = self.is_speaking
+        saved_sec = max(0, self.current_section_idx)
+
+        if self.translate_to_spanish_var.get():
+            if self.translated_sections:
+                self.stop_speech()
+                self.sections = self.translated_sections
+                self._refresh_tree_and_view(target_section=saved_sec, target_chunk=0)
+                self._update_file_info_header()
+                self.status_lbl.configure(text="🌐 Modo Español activado. Narración y texto en español.")
+                if was_speaking:
+                    self.start_speech(from_section=saved_sec, from_chunk=0)
+            else:
+                self.translate_book(force=False, auto_start_speech=was_speaking)
+        else:
+            self.stop_speech()
+            self.sections = self.original_sections
+            self._refresh_tree_and_view(target_section=saved_sec, target_chunk=0)
+            self._update_file_info_header()
+            self.status_lbl.configure(text="Mostrando texto original.")
+            if was_speaking:
+                self.start_speech(from_section=saved_sec, from_chunk=0)
+
+    def translate_book(self, force: bool = False, auto_start_speech: bool = True):
+        if not self.original_sections or not self.current_file:
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("🌐 Traduciendo al Español")
+        dialog.geometry("520x220")
+        dialog.resizable(False, False)
+        dialog.configure(bg=self.card_bg)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="🌐 Traduciendo documento al español", style="Header.TLabel").pack(anchor=tk.W, padx=16, pady=(12, 4))
+        ttk.Label(dialog, text="Traduciendo con IA neuronal y guardando en formato de lectura rápida…", style="Muted.TLabel").pack(anchor=tk.W, padx=16, pady=(0, 8))
+
+        prog_bar = ttk.Progressbar(dialog, mode="determinate", maximum=len(self.original_sections))
+        prog_bar.pack(fill=tk.X, padx=16, pady=8)
+
+        lbl_status = ttk.Label(dialog, text="Iniciando traducción…", style="Muted.TLabel")
+        lbl_status.pack(anchor=tk.W, padx=16, pady=4)
+
+        cancel_flag = [False]
+
+        def on_cancel():
+            cancel_flag[0] = True
+            dialog.destroy()
+
+        btn_cancel = ttk.Button(dialog, text="Cancelar", command=on_cancel)
+        btn_cancel.pack(anchor=tk.E, padx=16, pady=12)
+
+        def worker():
+            def on_progress(curr, tot, msg):
+                self.root.after(0, lambda c=curr, m=msg: (
+                    prog_bar.configure(value=c),
+                    lbl_status.configure(text=m)
+                ))
+
+            try:
+                tr_sections, det_lang = libro_mod.translate_sections_to_spanish(
+                    self.original_sections,
+                    source_path=self.current_file,
+                    force=force,
+                    progress_callback=on_progress,
+                    cancel_check=lambda: cancel_flag[0]
+                )
+
+                def on_finish():
+                    if cancel_flag[0]:
+                        self.translate_to_spanish_var.set(False)
+                        return
+                    dialog.destroy()
+                    if tr_sections:
+                        self.translated_sections = tr_sections
+                        self.translate_to_spanish_var.set(True)
+                        self.sections = tr_sections
+                        saved_sec = max(0, min(self.current_section_idx, len(tr_sections) - 1))
+                        self._refresh_tree_and_view(target_section=saved_sec, target_chunk=0)
+                        self._update_file_info_header()
+                        self.status_lbl.configure(text=f"✅ Traducido al español ({det_lang.upper()} ➔ ES). Narrando en español…")
+                        if auto_start_speech:
+                            self.root.after(100, lambda: self.start_speech(from_section=saved_sec, from_chunk=0))
+                    else:
+                        messagebox.showerror("Error", "No se pudo completar la traducción.")
+                        self.translate_to_spanish_var.set(False)
+
+                self.root.after(0, on_finish)
+            except Exception as e:
+                self.root.after(0, lambda err=e: (
+                    dialog.destroy(),
+                    messagebox.showerror("Error", f"Error durante la traducción:\n{err}"),
+                    self.translate_to_spanish_var.set(False)
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def export_txt_dialog(self):
         if not self.sections or not self.current_file:
             messagebox.showinfo("Aviso", "Primero abre un libro o documento.")
             return
 
-        default_name = f"{self.current_file.stem}_texto_extraido.txt"
+        is_translated = self.translate_to_spanish_var.get()
+        suffix = "_espanol.txt" if is_translated else "_texto_extraido.txt"
+        default_name = f"{self.current_file.stem}{suffix}"
         target = filedialog.asksaveasfilename(
-            title="Exportar texto plano extraído",
+            title="Exportar texto plano extraído" + (" (en Español)" if is_translated else ""),
             initialfile=default_name,
             defaultextension=".txt",
             filetypes=[("Archivo de texto plano (.txt)", "*.txt"), ("Todos los archivos", "*.*")],
@@ -441,8 +618,9 @@ class BookNarratorGUI:
 
         try:
             target_path = Path(target)
+            doc_label = f"{self.current_file.name} (Traducido al Español)" if is_translated else self.current_file.name
             libro_mod.export_sections_to_txt(
-                self.sections, target_path, doc_name=self.current_file.name, source_path=str(self.current_file.resolve())
+                self.sections, target_path, doc_name=doc_label, source_path=str(self.current_file.resolve())
             )
             messagebox.showinfo(
                 "Exportación exitosa",
@@ -893,6 +1071,18 @@ class BookNarratorGUI:
         ttk.Radiobutton(range_frame, text=f"Todo el libro ({len(self.sections)} páginas/secciones)", variable=range_var, value="all").pack(anchor=tk.W, pady=2)
         ttk.Radiobutton(range_frame, text=f"Solo la página/sección actual ({self.current_section_idx + 1})", variable=range_var, value="current").pack(anchor=tk.W, pady=2)
 
+        # Opciones de idioma
+        lang_frame = ttk.LabelFrame(dialog, text="Opciones de idioma", padding=10)
+        lang_frame.pack(fill=tk.X, **pad)
+
+        export_es_var = tk.BooleanVar(value=bool(self.translate_to_spanish_var.get() or self.doc_language != "es"))
+        chk_export_es = ttk.Checkbutton(
+            lang_frame,
+            text="🌐 Narrar y guardar audiolibro en Español (Traducido)",
+            variable=export_es_var,
+        )
+        chk_export_es.pack(anchor=tk.W, pady=2)
+
         # Destino
         dest_frame = ttk.LabelFrame(dialog, text="Archivo MP3 de salida", padding=10)
         dest_frame.pack(fill=tk.X, **pad)
@@ -905,8 +1095,23 @@ class BookNarratorGUI:
         elif (Path.home() / "Música").exists():
             default_dir = Path.home() / "Música"
 
-        default_name = f"{self.current_file.stem if self.current_file else 'audiolibro'}.mp3"
+        base_stem = self.current_file.stem if self.current_file else "audiolibro"
+        if export_es_var.get() and self.doc_language != "es":
+            default_name = f"{base_stem}_espanol.mp3"
+        else:
+            default_name = f"{base_stem}.mp3"
         dest_var = tk.StringVar(value=str(default_dir / default_name))
+
+        def on_export_es_toggled():
+            curr = dest_var.get()
+            if export_es_var.get() and not curr.endswith("_espanol.mp3"):
+                new_n = re.sub(r"(\.mp3)$", r"_espanol\1", curr)
+                dest_var.set(new_n)
+            elif not export_es_var.get() and curr.endswith("_espanol.mp3"):
+                new_n = curr.replace("_espanol.mp3", ".mp3")
+                dest_var.set(new_n)
+
+        chk_export_es.configure(command=on_export_es_toggled)
 
         entry_dest = ttk.Entry(dest_frame, textvariable=dest_var)
         entry_dest.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
@@ -915,7 +1120,7 @@ class BookNarratorGUI:
             f = filedialog.asksaveasfilename(
                 title="Guardar audiolibro MP3 como...",
                 initialdir=str(default_dir),
-                initialfile=default_name,
+                initialfile=Path(dest_var.get()).name,
                 defaultextension=".mp3",
                 filetypes=[("Archivos MP3", "*.mp3")],
             )
@@ -952,33 +1157,61 @@ class BookNarratorGUI:
             btn_start.configure(state=tk.DISABLED)
             btn_cancel.configure(text="Cancelar")
 
-            # Determinar secciones a exportar
-            if range_var.get() == "current" and 0 <= self.current_section_idx < len(self.sections):
-                target_sections = [self.sections[self.current_section_idx]]
-            else:
-                target_sections = self.sections
-
             voice, engine = self.get_selected_voice_and_engine()
             rate = float(self.rate_scale.get())
 
             def worker():
                 def on_progress(current_idx, total_count, text):
-                    self.root.after(0, lambda: (
-                        status_export_lbl.configure(text=text),
-                        prog_bar.configure(value=current_idx)
+                    self.root.after(0, lambda c=current_idx, t=text: (
+                        status_export_lbl.configure(text=t),
+                        prog_bar.configure(value=c)
                     ))
 
-                self.root.after(0, lambda: prog_bar.configure(maximum=len(target_sections), value=0))
-
                 try:
+                    # Determinar qué secciones usar (originales o traducidas)
+                    use_spanish = export_es_var.get()
+                    if use_spanish:
+                        if not self.translated_sections and self.current_file:
+                            cached_tr = libro_mod.load_translated_cached_sections(self.current_file, "es")
+                            if cached_tr:
+                                self.translated_sections = cached_tr[0]
+                        if not self.translated_sections:
+                            on_progress(0, len(self.original_sections), "Traduciendo secciones al español antes de sintetizar…")
+                            tr_secs, _ = libro_mod.translate_sections_to_spanish(
+                                self.original_sections,
+                                source_path=self.current_file,
+                                progress_callback=on_progress,
+                                cancel_check=lambda: cancel_flag[0],
+                            )
+                            if cancel_flag[0]:
+                                return
+                            self.translated_sections = tr_secs
+                        active_source = self.translated_sections if self.translated_sections else self.sections
+                    else:
+                        active_source = self.sections
+
+                    if range_var.get() == "current" and 0 <= self.current_section_idx < len(active_source):
+                        target_sections = [active_source[self.current_section_idx]]
+                    else:
+                        target_sections = active_source
+
+                    self.root.after(0, lambda: prog_bar.configure(maximum=len(target_sections), value=0))
+
+                    # Si se narra en español, asegurar voz española nativa
+                    export_voice = voice
+                    if use_spanish:
+                        v_lower = voice.lower()
+                        if not any(sp_v in v_lower for sp_v in ("mateo", "carlos", "leticia", "es-")):
+                            export_voice = "local:mateo" if "local" in engine else "edge:es-ES-ElviraNeural"
+
                     success = libro_mod.export_book_to_mp3(
                         sections=target_sections,
                         out_file=out_file,
-                        voice=voice,
+                        voice=export_voice,
                         engine=engine,
                         rate=rate,
-                        doc_title=self.current_file.stem if self.current_file else "Audiolibro",
-                        multilingual=self.multilingual_var.get(),
+                        doc_title=(self.current_file.stem if self.current_file else "Audiolibro") + (" (Español)" if use_spanish else ""),
+                        multilingual=not use_spanish,
                         progress_callback=on_progress,
                         cancel_check=lambda: cancel_flag[0],
                     )
