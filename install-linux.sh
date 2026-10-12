@@ -49,16 +49,23 @@ echo "✓ Ejecutable creado en: $LAUNCHER"
 
 # 4. Instalar iconos en el tema del sistema
 echo "🎨 Instalando iconos de la aplicación..."
+mkdir -p "$ICON_BASE/256x256/apps"
 mkdir -p "$ICON_BASE/128x128/apps"
 mkdir -p "$ICON_BASE/48x48/apps"
 mkdir -p "$ICON_BASE/16x16/apps"
+mkdir -p "$HOME/.local/share/pixmaps"
 
+[ -f "$DIR/icons/icon256.png" ] && cp "$DIR/icons/icon256.png" "$ICON_BASE/256x256/apps/narrador.png"
 [ -f "$DIR/icons/icon128.png" ] && cp "$DIR/icons/icon128.png" "$ICON_BASE/128x128/apps/narrador.png"
 [ -f "$DIR/icons/icon48.png" ] && cp "$DIR/icons/icon48.png" "$ICON_BASE/48x48/apps/narrador.png"
 [ -f "$DIR/icons/icon16.png" ] && cp "$DIR/icons/icon16.png" "$ICON_BASE/16x16/apps/narrador.png"
 
-# Icono de respaldo directo
-cp "$DIR/icons/icon128.png" "$HOME/.local/share/icons/narrador.png" 2>/dev/null || true
+# Iconos de respaldo en pixmaps y tema base
+[ -f "$DIR/icons/icon256.png" ] && cp "$DIR/icons/icon256.png" "$HOME/.local/share/pixmaps/narrador.png" 2>/dev/null || true
+[ -f "$DIR/icons/icon128.png" ] && cp "$DIR/icons/icon128.png" "$HOME/.local/share/icons/narrador.png" 2>/dev/null || true
+
+# Eliminar accesos directos obsoletos o duplicados si existían
+rm -f "$APP_DIR/narrador-libros.desktop"
 
 # 5. Crear archivo .desktop en el menú de aplicaciones
 mkdir -p "$APP_DIR"
@@ -71,8 +78,8 @@ Type=Application
 Name=Narrador de Libros
 GenericName=Lector de Libros y Audiolibros TTS
 Comment=Lee libros, PDFs, EPUBs y documentos en voz alta con voces neuronales y expórtalos a MP3
-Exec=$LAUNCHER %U
-Icon=$DIR/icons/icon128.png
+Exec="$LAUNCHER" %U
+Icon=narrador
 Terminal=false
 Categories=AudioVideo;Audio;Office;Viewer;Education;
 MimeType=application/pdf;application/epub+zip;text/plain;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;
@@ -90,6 +97,13 @@ fi
 
 if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -f -t "$ICON_BASE" 2>/dev/null || true
+fi
+
+# Actualizar caché de servicios de KDE Plasma si está disponible
+if command -v kbuildsycoca6 &>/dev/null; then
+    kbuildsycoca6 --noincremental 2>/dev/null || kbuildsycoca6 2>/dev/null || true
+elif command -v kbuildsycoca5 &>/dev/null; then
+    kbuildsycoca5 --noincremental 2>/dev/null || kbuildsycoca5 2>/dev/null || true
 fi
 
 echo ""

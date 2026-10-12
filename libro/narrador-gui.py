@@ -243,11 +243,17 @@ class BookNarratorGUI:
                 self.root.iconbitmap(str(ico_path))
             except Exception:
                 pass
-        icon_path = ROOT / "icons" / "icon128.png"
-        if icon_path.is_file():
+        photos = []
+        for s in (256, 128, 48, 16):
+            p = ROOT / "icons" / f"icon{s}.png"
+            if p.is_file():
+                try:
+                    photos.append(tk.PhotoImage(file=str(p)))
+                except Exception:
+                    pass
+        if photos:
             try:
-                img = tk.PhotoImage(file=str(icon_path))
-                self.root.iconphoto(True, img)
+                self.root.iconphoto(True, *photos)
             except Exception:
                 pass
 
@@ -1535,7 +1541,7 @@ class BookNarratorGUI:
 
 
 def main():
-    root = tk.Tk()
+    root = tk.Tk(className="narrador")
     app = BookNarratorGUI(root)
     if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():
         app.load_file(Path(sys.argv[1]))
